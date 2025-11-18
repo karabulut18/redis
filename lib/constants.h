@@ -1,0 +1,8 @@
+#pragma once
+
+#define IP_NAME_LENGTH 16
+#define TCP_BUFFER_SIZE 8*1024
+
+#define THREAD_START_TIMEOUT_SECONDS 2
+#define DEFAULT_PORT 8089
+#define DEFAULT_IP "127.0.0.1"
