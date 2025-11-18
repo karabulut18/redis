@@ -78,6 +78,12 @@ void Server::Run()
     printf("Server stopped\n");
 }
 
+
+void Server::OnClientDisconnect(int id)
+{
+    _clients.erase(id);
+}
+
 int main()
 {
     signal(SIGINT, signal_handler);

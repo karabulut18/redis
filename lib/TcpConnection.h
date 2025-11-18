@@ -4,6 +4,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include "header.h"
 
 class ITcpConnection;
 
@@ -39,7 +40,7 @@ public:
     int _socket;
     int _port;
     char _ip[IP_NAME_LENGTH];
-    char _buffer[TCP_BUFFER_SIZE];
+    char _buffer[TCP_MAX_MESSAGE_SIZE];
 
     ~TcpConnection();
 

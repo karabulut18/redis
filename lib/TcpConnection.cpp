@@ -9,6 +9,7 @@
 
 #include "ITcpConnection.h"
 #include "constants.h"
+#include "header.h"
 
 
 bool TcpConnection::IsRunning()
@@ -41,7 +42,7 @@ TcpConnection::TcpConnection()
     _port = -1;
     _owner = nullptr;
     memset(_ip, 0, IP_NAME_LENGTH);
-    memset(_buffer, 0, TCP_BUFFER_SIZE);
+    memset(_buffer, 0, TCP_MAX_MESSAGE_SIZE);
     _state = ClientState::Uninitialized;
 }
 
@@ -99,8 +100,8 @@ void TcpConnection::RunThread()
 
     while (_state == ClientState::Running)
     {
-        memset(_buffer, 0, TCP_BUFFER_SIZE);
-        ssize_t messageLength = read(_socket, _buffer, TCP_BUFFER_SIZE);
+        memset(_buffer, 0, TCP_MAX_MESSAGE_SIZE);
+        ssize_t messageLength = read(_socket, _buffer, TCP_MAX_MESSAGE_SIZE);
         if (messageLength > 0)
             _owner->OnMessage(_buffer, messageLength);
         else if (messageLength <= 0)
@@ -130,4 +131,6 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
 
 TcpConnection::~TcpConnection()
 {
+    if(_state == ClientState::Running)
+        Stop();
 }

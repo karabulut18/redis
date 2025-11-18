@@ -1,5 +1,6 @@
 #include "Client.h"
 #include "../lib/TcpConnection.h"
+#include "Server.h"
 
 
 Client::Client(int id, TcpConnection* connection)
@@ -30,4 +31,5 @@ void Client::OnDisconnect()
     // this might be a if the connection is closed by deleting the client
     // or the thread has to wait in Stop call
     printf("Client disconnected\n");
+    Server::Get()->OnClientDisconnect(_id);
 }

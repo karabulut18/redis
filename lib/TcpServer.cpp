@@ -134,3 +134,13 @@ TcpServer::~TcpServer()
     if (_state == ServerState::Running)
         Stop();
 };
+
+void TcpServer::RemoveClient(int id)
+{
+    std::map<int, TcpConnection*>::iterator it = _clientsById.find(id);
+    if(it != _clientsById.end())
+    {
+        delete it->second;
+        _clientsById.erase(it);
+    }
+}

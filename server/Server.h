@@ -23,7 +23,7 @@ class Server : public ITcpServer
 public:
     ITcpConnection* AcceptConnection(int id, TcpConnection* connection) override;
     static Server* Get();
-
+    void OnClientDisconnect(int id);
     void Run();
 
     bool IsRunning();

@@ -48,6 +48,7 @@ public:
     bool Init();
     void Stop();
     bool IsRunning();
+    void RemoveClient(int id);
 
 private:
     void RunThread();
