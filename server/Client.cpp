@@ -1,6 +1,8 @@
 #include "Client.h"
 #include "../lib/TcpConnection.h"
 #include "Server.h"
+#include "../msg/types.h"
+#include "../msg/shortString.h"
 
 
 Client::Client(int id, TcpConnection* connection)
@@ -23,7 +25,17 @@ void Client::Send(const char* c, ssize_t size)
 
 void Client::OnMessage(char* buffer, ssize_t length)
 {
-    printf("message:\n%s\n", buffer);   
+    const header* hdr = reinterpret_cast<const header*>(buffer);
+    switch(hdr->type)
+    {
+        case msg::SHORT_STRING:
+        {
+            msg::shortString* msg = reinterpret_cast<msg::shortString*>(buffer);
+            printf("message:\n%s\n", msg->_buffer);
+        }
+        default:
+            break;
+    };
 }
 
 void Client::OnDisconnect()

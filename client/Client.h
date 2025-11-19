@@ -19,5 +19,5 @@ public:
     void Stop();
     void Run();
 
-    void Heartbeat();
+    void SendHeartbeat();
 };

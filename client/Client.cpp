@@ -1,12 +1,24 @@
 #include "../lib/TcpConnection.h"
 #include "Client.h"
 #include <unistd.h>
-
+#include <signal.h>
+#include "../msg/types.h"
+#include "../msg/shortString.h"
 
 
 void Client::OnMessage(char* buffer, ssize_t length) 
 {
-    printf("message:\n%s\n", buffer);   
+    const header* hdr = reinterpret_cast<const header*>(buffer);
+    switch(hdr->type)
+    {
+        case msg::SHORT_STRING:
+        {
+            msg::shortString* msg = reinterpret_cast<msg::shortString*>(buffer);
+            printf("message:\n%s\n", msg->_buffer);
+        }
+        default:
+            break;
+    };
 };
 
 void Client::OnDisconnect() 
@@ -14,10 +26,13 @@ void Client::OnDisconnect()
     printf("Client disconnected\n");
 };
 
-void Client::Heartbeat()
+void Client::SendHeartbeat()
 {
-    char heartbeat[] = "Heartbeat from client";
-    _connection->Send(heartbeat, sizeof(heartbeat));
+    msg::shortString msg;
+    static int heartbeatCount = 0;
+    snprintf(msg._buffer, sizeof(msg._buffer),"Heartbeat %d from client", heartbeatCount++);
+    heartbeatCount = heartbeatCount%10000;
+    _connection->Send(reinterpret_cast<char*>(&msg), sizeof(msg));
 }
 
 Client* Client::Get()
@@ -57,7 +72,7 @@ void Client::Run()
     while(_connection->IsRunning())
     {
         sleep(1);
-        Heartbeat();
+        SendHeartbeat();
     }
     printf("Client stopped\n");
 }

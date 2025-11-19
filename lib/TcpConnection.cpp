@@ -11,7 +11,6 @@
 #include "constants.h"
 #include "header.h"
 
-
 bool TcpConnection::IsRunning()
 {
     return _state == ClientState::Running;
@@ -42,7 +41,6 @@ TcpConnection::TcpConnection()
     _port = -1;
     _owner = nullptr;
     memset(_ip, 0, IP_NAME_LENGTH);
-    memset(_buffer, 0, TCP_MAX_MESSAGE_SIZE);
     _state = ClientState::Uninitialized;
 }
 
@@ -100,12 +98,34 @@ void TcpConnection::RunThread()
 
     while (_state == ClientState::Running)
     {
-        memset(_buffer, 0, TCP_MAX_MESSAGE_SIZE);
-        ssize_t messageLength = read(_socket, _buffer, TCP_MAX_MESSAGE_SIZE);
-        if (messageLength > 0)
-            _owner->OnMessage(_buffer, messageLength);
-        else if (messageLength <= 0)
+        header hdr(0,0);
+        ssize_t bytesRead = read(_socket, &hdr, sizeof(hdr));
+
+        if(bytesRead < sizeof(header))
             break;
+
+        if(hdr.length > TCP_MAX_MESSAGE_SIZE)
+            break;
+
+        memcpy(_buffer, &hdr, sizeof(header));
+        ssize_t bodyLength = hdr.length - sizeof(header);
+        ssize_t bodyBytesToRead = 0;
+
+        if(bodyLength < 0)
+            break;
+
+        while(bytesRead < bodyLength)
+        {
+            bytesRead = read(_socket, _buffer + sizeof(header) + bodyBytesToRead, bodyLength - bodyBytesToRead);
+            if(bytesRead < 0)
+                break;
+            bodyBytesToRead += bytesRead;
+        }
+ 
+        if(bytesRead < 0)
+            break;
+
+        _owner->OnMessage(_buffer, hdr.length);
     };
 
     _owner->OnDisconnect();
@@ -126,7 +146,16 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
     if (_state != ClientState::Running)
         return;
 
-    write(_socket, buffer, length);
+    ssize_t bytesSent = 0;
+
+    while(bytesSent < length)
+    {
+        ssize_t bytesToWrite = length - bytesSent;
+        ssize_t bytesWritten = write(_socket, buffer + bytesSent, bytesToWrite);
+        if(bytesWritten < 0)
+            break;
+        bytesSent += bytesWritten;
+    }
 };
 
 TcpConnection::~TcpConnection()

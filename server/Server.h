@@ -18,8 +18,6 @@ class Server : public ITcpServer
     std::map<int, Client*> _clients;
 
     void SendHeartbeat();
-
-
 public:
     ITcpConnection* AcceptConnection(int id, TcpConnection* connection) override;
     static Server* Get();

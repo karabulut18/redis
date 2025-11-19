@@ -5,6 +5,8 @@
 #include "../lib/TcpConnection.h"
 #include "Client.h"
 #include <unistd.h>
+#include "../msg/types.h"
+#include "../msg/shortString.h"
 
 
 Server* Server::Get()
@@ -32,11 +34,14 @@ ITcpConnection* Server::AcceptConnection(int id, TcpConnection* connection)
 
 void Server::SendHeartbeat()
 {
-    char heartbeat[] = "Heartbeat from server";
+    static int heartbeatCount = 0;
+    msg::shortString msg;
+    snprintf(msg._buffer, sizeof(msg._buffer),"Heartbeat %d from server", heartbeatCount++);
+
     for(std::pair<int, Client*> iterator : _clients)
-    {
-        iterator.second->Send(heartbeat, sizeof(heartbeat));
-    }
+        iterator.second->Send(reinterpret_cast<char*>(&msg), sizeof(msg));
+
+    heartbeatCount = heartbeatCount%10000;
 }
 
 
@@ -77,7 +82,6 @@ void Server::Run()
     }
     printf("Server stopped\n");
 }
-
 
 void Server::OnClientDisconnect(int id)
 {

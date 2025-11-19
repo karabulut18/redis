@@ -53,6 +53,7 @@ public:
     void Stop();
     void Send(const char* buffer, ssize_t length);
     bool IsRunning();
+
 private:
     TcpConnection();
     void RunThread();
