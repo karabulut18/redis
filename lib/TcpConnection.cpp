@@ -10,6 +10,7 @@
 #include "ITcpConnection.h"
 #include "constants.h"
 #include "header.h"
+#include "fd_util.h"
 
 bool TcpConnection::IsRunning()
 {
@@ -29,7 +30,7 @@ TcpConnection* TcpConnection::CreateFromPortAndIp(int port, const char* ip)
 TcpConnection* TcpConnection::CreateFromSocket(int socket)
 {
     TcpConnection* instance = new TcpConnection();
-    instance->_socket = socket;
+    instance->_socketfd = socket;
     instance->_ownerType = OwnerType::Server;
     instance->_state = ClientState::Initialized;
     return instance;
@@ -37,22 +38,25 @@ TcpConnection* TcpConnection::CreateFromSocket(int socket)
 
 TcpConnection::TcpConnection()
 {
-    _socket = -1;
+    _socketfd = -1;
     _port = -1;
     _owner = nullptr;
     memset(_ip, 0, IP_NAME_LENGTH);
     _state = ClientState::Uninitialized;
 }
 
-bool TcpConnection::Init()
+
+bool TcpConnection::Init(ConcurrencyType type)
 {
     if (_state != ClientState::OwnerSet)
         return false;
 
+    _concurencyType = type;
+
     if (_ownerType == OwnerType::Client)
     {
-        _socket = socket(AF_INET, SOCK_STREAM, 0);
-        if (_socket == -1)
+        _socketfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (_socketfd == -1)
             return false;
 
         struct sockaddr_in address;
@@ -60,12 +64,15 @@ bool TcpConnection::Init()
         address.sin_port = htons(_port);
         address.sin_addr.s_addr = inet_addr(_ip);
 
-        if (connect(_socket, (struct sockaddr*)&address, sizeof(address)) < 0)
+        if (connect(_socketfd, (struct sockaddr*)&address, sizeof(address)) < 0)
         {
-            close(_socket);
+            close(_socketfd);
             return false;
         }
     }
+
+    if(_concurencyType == ConcurrencyType::EventBased)
+        return PrepareEventBased();
 
     std::thread t(&TcpConnection::RunThread, this);
     t.detach();
@@ -76,6 +83,75 @@ bool TcpConnection::Init()
             return false;
     }
 
+    return true;
+}
+
+bool TcpConnection::closeRequested()
+{
+    return _connClose;
+}
+
+void TcpConnection::handleWrite()
+{
+    if(!_outgoing.canConsume())
+        return;
+
+    m_size_t frameSize = _outgoing.peekFrameSize();
+    if(frameSize == 0)
+        return;
+
+    const char* outgoing = _outgoing.peekFramePtr();
+    if(outgoing == nullptr)
+        return;
+
+    ssize_t rv = write(_socketfd, outgoing, frameSize);
+    if (rv < 0) {
+        _connClose= true;    // error handling
+        return;
+    }
+    _outgoing.consume(rv);
+}
+
+void TcpConnection::handleRead()
+{
+    ssize_t rv = read(_socketfd, _buffer, sizeof(_buffer));
+    if (rv <= 0) 
+    {  // handle IO error (rv < 0) or EOF (rv == 0)
+        _connClose = true;
+        return;
+    }
+    // 2. Add new data to the `Conn::incoming` buffer.
+    _incoming.append(_buffer, (m_size_t)rv);
+
+    if(_incoming.canConsume())
+    {
+        m_size_t frameSize = _incoming.peekFrameSize();
+        if(frameSize == 0)
+            return;
+
+        const char* data = _incoming.peekFramePtr();
+        if(data == nullptr)
+            return;
+        
+        _owner->OnMessage(data, frameSize);
+
+        _incoming.consume(frameSize);
+    }
+}
+
+bool TcpConnection::PrepareEventBased()
+{
+    if(_state != ClientState::OwnerSet)
+        return false;
+
+    if(fd_util::fd_set_nonblock(_socketfd) == false) 
+        return false;
+
+    _connRead   = true; // read first messaage
+    _connWrite  = false;
+    _connClose  = false;
+    
+    _state = ClientState::Running;
     return true;
 }
 
@@ -98,8 +174,9 @@ void TcpConnection::RunThread()
 
     while (_state == ClientState::Running)
     {
+        // this part is specialized for the header
         header hdr(0,0);
-        ssize_t bytesRead = read(_socket, &hdr, sizeof(hdr));
+        ssize_t bytesRead = read(_socketfd, &hdr, sizeof(hdr));
 
         if(bytesRead < sizeof(header))
             break;
@@ -116,7 +193,7 @@ void TcpConnection::RunThread()
 
         while(bytesRead < bodyLength)
         {
-            bytesRead = read(_socket, _buffer + sizeof(header) + bodyBytesToRead, bodyLength - bodyBytesToRead);
+            bytesRead = read(_socketfd, _buffer + sizeof(header) + bodyBytesToRead, bodyLength - bodyBytesToRead);
             if(bytesRead < 0)
                 break;
             bodyBytesToRead += bytesRead;
@@ -129,7 +206,7 @@ void TcpConnection::RunThread()
     };
 
     _owner->OnDisconnect();
-    close(_socket);
+    close(_socketfd);
     _state = ClientState::Stopped;
 }
 
@@ -151,7 +228,7 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
     while(bytesSent < length)
     {
         ssize_t bytesToWrite = length - bytesSent;
-        ssize_t bytesWritten = write(_socket, buffer + bytesSent, bytesToWrite);
+        ssize_t bytesWritten = write(_socketfd, buffer + bytesSent, bytesToWrite);
         if(bytesWritten < 0)
             break;
         bytesSent += bytesWritten;

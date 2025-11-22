@@ -6,6 +6,7 @@
 #include <mutex>
 #include <map>
 #include <netinet/in.h>
+#include "ConcurrencyType.h"
 
 class ITcpServer;
 class TcpConnection;
@@ -22,7 +23,6 @@ enum class ServerState
 };
 
 
-
 class TcpServer
 {
     struct sockaddr_in _serverAddress = {};
@@ -34,12 +34,14 @@ class TcpServer
     std::condition_variable _cv;
     std::mutex              _cv_mutex;
 
-    int _clientIndex = 0;
-    std::map<int, TcpConnection*> _clientsById;
+    ConcurrencyType _concurrencyType = ConcurrencyType::ThreadBased;
+    std::map<int, TcpConnection*> _connectionsBySocketfds;
 
     Error   _error;
+
+    std::vector<struct pollfd> _pollArgs;
 public:
-    int     _socket;
+    int     _socketfd;
     int     _port;
 
     TcpServer(ITcpServer* owner, int port);
@@ -52,5 +54,9 @@ public:
 
 private:
     void RunThread();
+    void EventBased();
+    void ThreadBased();
     void CleanUp();
+
+    void handleAccept();
 };

@@ -11,6 +11,8 @@
 #include "constants.h"
 #include "ITcpServer.h"
 #include "TcpConnection.h"
+#include "fd_util.h"
+#include <poll.h>
 
 
 
@@ -26,26 +28,35 @@ bool TcpServer::Init()
         return false;
     }
 
-    _socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (_socket == -1)
+    _socketfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (_socketfd == -1)
     {
         _error.Set(errno, "socket creation");
         return false;
     };
     int val = 1;
-    setsockopt(_socket, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    setsockopt(_socketfd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+
+    if(_concurrencyType == ConcurrencyType::EventBased)
+    {
+        if(!fd_util::fd_set_nonblock(_socketfd))
+        {
+            _error.Set(errno, "fd_set_nonblock");
+            return false;
+        }
+    }
 
     _serverAddress.sin_family = AF_INET; 
     _serverAddress.sin_addr.s_addr = htonl(0); 
     _serverAddress.sin_port = htons(_port); 
 
-    if (bind(_socket, (struct sockaddr*)&_serverAddress, sizeof(_serverAddress)) == -1)
+    if (bind(_socketfd, (struct sockaddr*)&_serverAddress, sizeof(_serverAddress)) == -1)
     {
         _error.Set(errno, "bind");
         return false;
     };
 
-    if (listen(_socket, SOMAXCONN) == -1)
+    if (listen(_socketfd, SOMAXCONN) == -1)
     {
         _error.Set(errno, "listen");
         return false;
@@ -77,42 +88,112 @@ void TcpServer::RunThread()
 
     _state = ServerState::Running;
 
+    if(_concurrencyType == ConcurrencyType::EventBased)
+        EventBased();
+    else if(_concurrencyType == ConcurrencyType::ThreadBased)
+        ThreadBased();
+
     _cv.notify_one();
-
-    while(_state == ServerState::Running)
-    {
-        struct sockaddr_in client_addr = {};
-        socklen_t addrlen = sizeof(client_addr);
-        int clientSocket = accept(_socket, (struct sockaddr *)&client_addr, &addrlen);
-        if(clientSocket == -1)
-        {
-            _error.Set(errno, "accept connection");
-        }
-        else
-        {
-            getpeername(clientSocket, (struct sockaddr *)&client_addr, &addrlen);
-
-            TcpConnection* connection = TcpConnection::CreateFromSocket(clientSocket);
-
-            // fix the logical mistake here
-            ITcpConnection* connectionOwner = _owner->AcceptConnection(_clientIndex, connection);
-            connection->SetOwner(connectionOwner);
-
-            if(connection->Init())
-                _clientsById.insert({_clientIndex++, connection});
-            else
-                delete connection;
-        }
-    }
 
     CleanUp();
 };
 
-void TcpServer::CleanUp()
+void TcpServer::EventBased()
 {
-    close(_socket);
+    while(_state == ServerState::Running)
+    {
+        _pollArgs.clear();
+        
+        struct pollfd server_pfd = {_socketfd, POLLIN, 0};
+        _pollArgs.push_back(server_pfd);
+
+        for(std::pair<int, TcpConnection*> iter : _connectionsBySocketfds)
+        {
+            TcpConnection* conn = iter.second;
+            struct pollfd client_pfd = {conn->_socketfd, POLLIN, 0};
+            if(conn->_connRead)
+            {
+                client_pfd.events |= POLLIN;
+            }
+            if(conn->_connWrite)
+            {
+                client_pfd.events |= POLLOUT;
+            }
+            _pollArgs.push_back(client_pfd);
+        }
+
+        int returnValue = poll(_pollArgs.data(), (nfds_t)_pollArgs.size(), -1);
+
+        if(returnValue < 0 && errno == EINTR)
+            continue;
+        
+        if(returnValue < 0)
+        {
+            _error.Set(errno, "poll");
+            break;
+        }
+
+        if(_pollArgs[0].revents & POLLIN) // first one is for listening socket
+            handleAccept();
+
+        for(size_t i = 1; i < _pollArgs.size(); i++)
+        {
+            uint32_t ready = _pollArgs[i].revents;
+            TcpConnection* conn = _connectionsBySocketfds[_pollArgs[i].fd];
+            if(ready & POLLIN)
+                conn->handleRead();
+            if(ready & POLLOUT)
+                conn->handleWrite();
+
+            if((ready & POLLERR) ||  (ready & POLLHUP) || conn->closeRequested())
+            {
+                // if POLLER says there is an error
+                //conn->Close();
+                delete conn;
+                _connectionsBySocketfds.erase(_pollArgs[i].fd);
+            }
+        }
+    }
 }
 
+void TcpServer::handleAccept()
+{
+    struct sockaddr_in client_addr = {};
+    socklen_t addrlen = sizeof(client_addr);
+    int clientSocket = accept(_socketfd, (struct sockaddr *)&client_addr, &addrlen);
+    if(clientSocket == -1)
+    {
+        _error.Set(errno, "accept connection");
+    }
+    else
+    {
+        getpeername(clientSocket, (struct sockaddr *)&client_addr, &addrlen);
+
+        TcpConnection* connection = TcpConnection::CreateFromSocket(clientSocket);
+
+        // fix the logical mistake here
+        ITcpConnection* connectionOwner = _owner->AcceptConnection(connection->_socketfd, connection);
+        connection->SetOwner(connectionOwner);
+        if(connection->Init(_concurrencyType))
+            _connectionsBySocketfds.insert({connection->_socketfd, connection});
+        else
+            delete connection;
+    }
+}
+
+void TcpServer::ThreadBased()
+{
+    while(_state == ServerState::Running)
+    {
+        handleAccept();
+        sleep(1);
+    }
+}
+
+void TcpServer::CleanUp() // will be advanced
+{
+    close(_socketfd);
+}
 
 void TcpServer::Stop()
 {
@@ -137,10 +218,10 @@ TcpServer::~TcpServer()
 
 void TcpServer::RemoveClient(int id)
 {
-    std::map<int, TcpConnection*>::iterator it = _clientsById.find(id);
-    if(it != _clientsById.end())
+    std::map<int, TcpConnection*>::iterator it = _connectionsBySocketfds.find(id);
+    if(it != _connectionsBySocketfds.end())
     {
         delete it->second;
-        _clientsById.erase(it);
+        _connectionsBySocketfds.erase(it);
     }
 }
