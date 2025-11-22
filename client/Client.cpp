@@ -6,14 +6,14 @@
 #include "../msg/shortString.h"
 
 
-void Client::OnMessage(char* buffer, ssize_t length) 
+void Client::OnMessage(const char* buffer, m_size_t length) 
 {
     const header* hdr = reinterpret_cast<const header*>(buffer);
     switch(hdr->type)
     {
         case msg::SHORT_STRING:
         {
-            msg::shortString* msg = reinterpret_cast<msg::shortString*>(buffer);
+            const msg::shortString* msg = reinterpret_cast<const msg::shortString*>(buffer);
             printf("message:\n%s\n", msg->_buffer);
         }
         default:
@@ -54,7 +54,7 @@ Client::Client()
 bool Client::Init()
 {
     _connection->SetOwner(this);
-    return _connection->Init();
+    return _connection->Init(ConcurrencyType::ThreadBased);
 }
 
 bool Client::IsRunning()

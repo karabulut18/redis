@@ -8,7 +8,7 @@ class Client : public ITcpConnection
     TcpConnection* _connection = nullptr;
     Client();
 public:
-    void OnMessage(char* buffer, ssize_t length) override;
+    void OnMessage(const char* buffer, m_size_t length) override;
     void OnDisconnect() override;
     ~Client() override;
 
