@@ -1,13 +1,14 @@
 #pragma once
 
+#include <cstdint>
+
 #define TCP_MAX_MESSAGE_SIZE 8*1024
 #define SIZE_VARIABLE_LENGTH sizeof(m_size_t)
 
 typedef uint32_t m_size_t;
 
-struct header
+struct frame_header
 {
-    uint32_t length;
-    uint32_t type;
-    header(uint32_t length, uint32_t type): length(length), type(type) {}
+    m_size_t length;
+    frame_header(m_size_t length): length(length) {};
 } __attribute__((packed, aligned(8)));

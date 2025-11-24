@@ -9,7 +9,7 @@
 
 #include "ITcpConnection.h"
 #include "constants.h"
-#include "header.h"
+#include "frame_header.h"
 #include "fd_util.h"
 
 bool TcpConnection::IsRunning()
@@ -93,23 +93,40 @@ bool TcpConnection::closeRequested()
 
 void TcpConnection::handleWrite()
 {
-    if(!_outgoing.canConsume())
+    m_size_t frameSize = 0;
+    if(!_outgoing.canConsumeFrame(frameSize))
         return;
-
-    m_size_t frameSize = _outgoing.peekFrameSize();
+    
     if(frameSize == 0)
         return;
 
     const char* outgoing = _outgoing.peekFramePtr();
     if(outgoing == nullptr)
         return;
+    
+    m_size_t sendSize = 0;
 
-    ssize_t rv = write(_socketfd, outgoing, frameSize);
-    if (rv < 0) {
-        _connClose= true;    // error handling
-        return;
+    bool errorInWrite = false;
+
+    while(frameSize > sendSize)
+    {
+        ssize_t bytesWritten = write(_socketfd, outgoing + sendSize, frameSize - sendSize);
+        if (bytesWritten < 0)
+        {
+            if(errno != EAGAIN && errno != EWOULDBLOCK)
+                _connClose = true;
+            errorInWrite = true; 
+            break;
+        }
+        else
+            sendSize += bytesWritten;
     }
-    _outgoing.consume(rv);
+
+    if(!errorInWrite)
+        _outgoing.consume(frameSize);
+
+    if(!_outgoing.canConsumeFrame())
+        _connWrite = false;
 }
 
 void TcpConnection::handleRead()
@@ -123,7 +140,7 @@ void TcpConnection::handleRead()
     // 2. Add new data to the `Conn::incoming` buffer.
     _incoming.append(_buffer, (m_size_t)rv);
 
-    if(_incoming.canConsume())
+    if(_incoming.canConsumeFrame())
     {
         m_size_t frameSize = _incoming.peekFrameSize();
         if(frameSize == 0)
@@ -133,7 +150,7 @@ void TcpConnection::handleRead()
         if(data == nullptr)
             return;
         
-        _owner->OnMessage(data, frameSize);
+        _owner->OnMessageReceive(data, frameSize);
 
         _incoming.consume(frameSize);
     }
@@ -147,7 +164,6 @@ bool TcpConnection::PrepareEventBased()
     if(fd_util::fd_set_nonblock(_socketfd) == false) 
         return false;
 
-    _connRead   = true; // read first messaage
     _connWrite  = false;
     _connClose  = false;
     
@@ -174,35 +190,7 @@ void TcpConnection::RunThread()
 
     while (_state == ClientState::Running)
     {
-        // this part is specialized for the header
-        header hdr(0,0);
-        ssize_t bytesRead = read(_socketfd, &hdr, sizeof(hdr));
-
-        if(bytesRead < sizeof(header))
-            break;
-
-        if(hdr.length > TCP_MAX_MESSAGE_SIZE)
-            break;
-
-        memcpy(_buffer, &hdr, sizeof(header));
-        ssize_t bodyLength = hdr.length - sizeof(header);
-        ssize_t bodyBytesToRead = 0;
-
-        if(bodyLength < 0)
-            break;
-
-        while(bytesRead < bodyLength)
-        {
-            bytesRead = read(_socketfd, _buffer + sizeof(header) + bodyBytesToRead, bodyLength - bodyBytesToRead);
-            if(bytesRead < 0)
-                break;
-            bodyBytesToRead += bytesRead;
-        }
- 
-        if(bytesRead < 0)
-            break;
-
-        _owner->OnMessage(_buffer, hdr.length);
+        handleRead();
     };
 
     _owner->OnDisconnect();
@@ -214,6 +202,10 @@ void TcpConnection::Stop()
 {
     if (_state == ClientState::Running)
     {
+        if(_concurencyType == ConcurrencyType::EventBased)
+        {
+            _connClose = true;
+        }
         _state = ClientState::StopRequested;
     }
 };
@@ -222,16 +214,25 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
 {
     if (_state != ClientState::Running)
         return;
-
-    ssize_t bytesSent = 0;
-
-    while(bytesSent < length)
+    
+    if(_concurencyType == ConcurrencyType::EventBased)
     {
-        ssize_t bytesToWrite = length - bytesSent;
-        ssize_t bytesWritten = write(_socketfd, buffer + bytesSent, bytesToWrite);
-        if(bytesWritten < 0)
-            break;
-        bytesSent += bytesWritten;
+        _outgoing.append(buffer, length);
+        _connWrite = true;
+        return;
+    }
+    else
+    {
+        ssize_t bytesSent = 0;
+
+        while(bytesSent < length)
+        {
+            ssize_t bytesToWrite = length - bytesSent;
+            ssize_t bytesWritten = write(_socketfd, buffer + bytesSent, bytesToWrite);
+            if(bytesWritten < 0)
+                break;
+            bytesSent += bytesWritten;
+        }
     }
 };
 

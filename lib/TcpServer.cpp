@@ -98,6 +98,11 @@ void TcpServer::RunThread()
     CleanUp();
 };
 
+void TcpServer::SetConcurrencyType(ConcurrencyType type)
+{
+    _concurrencyType = type;
+}
+
 void TcpServer::EventBased()
 {
     while(_state == ServerState::Running)
@@ -110,15 +115,11 @@ void TcpServer::EventBased()
         for(std::pair<int, TcpConnection*> iter : _connectionsBySocketfds)
         {
             TcpConnection* conn = iter.second;
-            struct pollfd client_pfd = {conn->_socketfd, POLLIN, 0};
-            if(conn->_connRead)
-            {
-                client_pfd.events |= POLLIN;
-            }
-            if(conn->_connWrite)
-            {
+
+            struct pollfd client_pfd = {conn->_socketfd, POLLIN, 0}; // always poll for reads
+            
+            if(conn->_connWrite) // poll for write only if write is set
                 client_pfd.events |= POLLOUT;
-            }
             _pollArgs.push_back(client_pfd);
         }
 
@@ -147,8 +148,6 @@ void TcpServer::EventBased()
 
             if((ready & POLLERR) ||  (ready & POLLHUP) || conn->closeRequested())
             {
-                // if POLLER says there is an error
-                //conn->Close();
                 delete conn;
                 _connectionsBySocketfds.erase(_pollArgs[i].fd);
             }

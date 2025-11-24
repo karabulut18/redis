@@ -23,14 +23,15 @@ void Client::Send(const char* c, ssize_t size)
 }
 
 
-void Client::OnMessage(char* buffer, ssize_t length)
+
+void Client::OnMessageReceive(const char* buffer, m_size_t size)
 {
-    const header* hdr = reinterpret_cast<const header*>(buffer);
-    switch(hdr->type)
+    const msg::header* hdr = reinterpret_cast<const msg::header*>(buffer);
+    switch(hdr->_type)
     {
         case msg::SHORT_STRING:
         {
-            msg::shortString* msg = reinterpret_cast<msg::shortString*>(buffer);
+            const msg::shortString* msg = reinterpret_cast<const msg::shortString*>(buffer);
             printf("message:\n%s\n", msg->_buffer);
         }
         default:

@@ -16,7 +16,20 @@ m_size_t DynamicBuffer::peekFrameSize() const
     return size;
 }
 
-bool DynamicBuffer::canConsume() const
+bool DynamicBuffer::canConsumeFrame(m_size_t& frameSize) const
+{
+    frameSize = 0;
+    if(_buffer.size() < SIZE_VARIABLE_LENGTH)
+        return false;
+    memcpy(&frameSize, _buffer.data(), SIZE_VARIABLE_LENGTH);
+
+    if(_buffer.size() >= SIZE_VARIABLE_LENGTH + frameSize)
+        return true;
+ 
+    return false;
+}
+
+bool DynamicBuffer::canConsumeFrame() const
 {
     m_size_t size = 0;
     if(_buffer.size() < SIZE_VARIABLE_LENGTH)
@@ -29,35 +42,16 @@ bool DynamicBuffer::canConsume() const
     return false;
 }
 
-m_size_t DynamicBuffer::peekFrame(char* data) const
-{
-    m_size_t size = canConsume();
-    if(size == 0)
-        return 0;
-    
-    memcpy(data, _buffer.data() + sizeof(m_size_t), size);
-    return size;
-}
-
 const char* DynamicBuffer::peekFramePtr() const
 {
-    m_size_t size = canConsume();
-    if(size == 0)
+    m_size_t frameSize = 0;
+    if(!canConsumeFrame(frameSize))
+        return nullptr;
+
+    if(frameSize == 0)
         return nullptr;
     
     return _buffer.data();
-}
-
-
-m_size_t DynamicBuffer::consumeframe(char* data)
-{
-    m_size_t size = canConsume();
-    if(size == 0)
-        return 0;
-    
-    peekFrame(data);
-    consume(size);
-    return size;
 }
 
 void DynamicBuffer::consume(m_size_t size)

@@ -4,7 +4,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include "header.h"
+#include "frame_header.h"
 #include "DynamicBuffer.h"
 #include "ConcurrencyType.h"
 
@@ -44,7 +44,6 @@ public:
     char _ip[IP_NAME_LENGTH];
 
     int _socketfd;
-    bool _connRead  = false;
     bool _connWrite = false;
     bool _connClose = false;
 

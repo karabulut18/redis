@@ -6,10 +6,10 @@
 #include "../msg/shortString.h"
 
 
-void Client::OnMessage(const char* buffer, m_size_t length) 
+void Client::OnMessageReceive(const char* buffer, m_size_t length) 
 {
-    const header* hdr = reinterpret_cast<const header*>(buffer);
-    switch(hdr->type)
+    const msg::header* hdr = reinterpret_cast<const msg::header*>(buffer);
+    switch(hdr->_type)
     {
         case msg::SHORT_STRING:
         {

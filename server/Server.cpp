@@ -18,6 +18,7 @@ Server* Server::Get()
 Server::Server()
 {
     _tcpServer = new TcpServer(this, DEFAULT_PORT);
+    _tcpServer->SetConcurrencyType(ConcurrencyType::EventBased);
 };
 
 bool Server::Init()

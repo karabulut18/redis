@@ -47,6 +47,7 @@ public:
     TcpServer(ITcpServer* owner, int port);
     ~TcpServer();
 
+    void SetConcurrencyType(ConcurrencyType type);
     bool Init();
     void Stop();
     bool IsRunning();
