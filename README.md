@@ -1,3 +1,3 @@
 # redis
 
-building redis from scratch in c/c++
+implementing redis from scratch in c/c++
