@@ -3,6 +3,8 @@
 #include "Server.h"
 #include "../msg/types.h"
 #include "../msg/shortString.h"
+#include "../lib/Output.h"
+#include <string>
 
 
 Client::Client(int id, TcpConnection* connection)
@@ -22,8 +24,6 @@ void Client::Send(const char* c, ssize_t size)
     _connection->Send(c, size);
 }
 
-
-
 void Client::OnMessageReceive(const char* buffer, m_size_t size)
 {
     const msg::header* hdr = reinterpret_cast<const msg::header*>(buffer);
@@ -32,7 +32,7 @@ void Client::OnMessageReceive(const char* buffer, m_size_t size)
         case msg::SHORT_STRING:
         {
             const msg::shortString* msg = reinterpret_cast<const msg::shortString*>(buffer);
-            printf("message:\n%s\n", msg->_buffer);
+            PUTF("message:\n"+ std::string(msg->_buffer) + "\n");
         }
         default:
             break;
@@ -43,6 +43,6 @@ void Client::OnDisconnect()
 {
     // this might be a if the connection is closed by deleting the client
     // or the thread has to wait in Stop call
-    printf("Client disconnected\n");
+    PUTF_LN("Client disconnected: " + std::to_string(_id) + std::to_string(__LINE__));
     Server::Get()->OnClientDisconnect(_id);
 }

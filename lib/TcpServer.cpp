@@ -87,13 +87,12 @@ void TcpServer::RunThread()
         return;
 
     _state = ServerState::Running;
+    _cv.notify_one();
 
     if(_concurrencyType == ConcurrencyType::EventBased)
         EventBased();
     else if(_concurrencyType == ConcurrencyType::ThreadBased)
         ThreadBased();
-
-    _cv.notify_one();
 
     CleanUp();
 };

@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include "../msg/types.h"
 #include "../msg/shortString.h"
+#include "../lib/Output.h"
+
 
 
 Server* Server::Get()
@@ -19,6 +21,7 @@ Server::Server()
 {
     _tcpServer = new TcpServer(this, DEFAULT_PORT);
     _tcpServer->SetConcurrencyType(ConcurrencyType::EventBased);
+    PUTF_LN("Server is set");
 };
 
 bool Server::Init()
@@ -30,6 +33,7 @@ ITcpConnection* Server::AcceptConnection(int id, TcpConnection* connection)
 {
     Client* client = new Client(id, connection);
     _clients.insert({id, client});
+    PUTF_LN("New client connected " + std::to_string(id));
     return client;
 }
 
@@ -81,16 +85,19 @@ void Server::Run()
         sleep(1);
         SendHeartbeat();
     }
-    printf("Server stopped\n");
+    PUTF_LN("Server stopped\n");
 }
 
 void Server::OnClientDisconnect(int id)
 {
+    PUTF_LN("Client disconnected: " + std::to_string(id));
     _clients.erase(id);
 }
 
 int main()
 {
+    Output::GetInstance()->Init("redis_server");
+
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 

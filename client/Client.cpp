@@ -4,6 +4,8 @@
 #include <signal.h>
 #include "../msg/types.h"
 #include "../msg/shortString.h"
+#include "../lib/Output.h"
+#include <string>
 
 
 void Client::OnMessageReceive(const char* buffer, m_size_t length) 
@@ -14,7 +16,7 @@ void Client::OnMessageReceive(const char* buffer, m_size_t length)
         case msg::SHORT_STRING:
         {
             const msg::shortString* msg = reinterpret_cast<const msg::shortString*>(buffer);
-            printf("message:\n%s\n", msg->_buffer);
+            PUTF("message:\n" + std::string(msg->_buffer) + "\n");
         }
         default:
             break;
@@ -23,7 +25,7 @@ void Client::OnMessageReceive(const char* buffer, m_size_t length)
 
 void Client::OnDisconnect() 
 {
-    printf("Client disconnected\n");
+    PUTFC_LN("Client disconnected");
 };
 
 void Client::SendHeartbeat()
@@ -54,6 +56,7 @@ Client::Client()
 bool Client::Init()
 {
     _connection->SetOwner(this);
+    PUTFC_LN("Client Created");
     return _connection->Init(ConcurrencyType::ThreadBased);
 }
 
@@ -74,7 +77,7 @@ void Client::Run()
         sleep(1);
         SendHeartbeat();
     }
-    printf("Client stopped\n");
+    PUTFC_LN("Client stopped");
 }
 
 void signal_handler(int signum)
@@ -85,6 +88,7 @@ void signal_handler(int signum)
 
 int main()
 {
+    Output::GetInstance()->Init("redis_client");
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
