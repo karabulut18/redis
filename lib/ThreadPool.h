@@ -1,0 +1,38 @@
+#pragma once
+
+#include <vector>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+class ThreadPool;
+
+class Worker
+{
+    ThreadPool* _pool;
+public:
+    Worker(ThreadPool* pool) : _pool(pool) {}
+    void operator()();
+};
+
+class ThreadPool
+{
+    friend class Worker;
+    bool                    _stop;
+    std::mutex              _queueMutex;
+    std::condition_variable _cv;
+
+    std::vector<std::thread> _workers;
+    std::queue<std::function<void()>> _tasks;
+
+public:
+    ThreadPool(int n = std::thread::hardware_concurrency());
+    void Enqueue(std::function<void()> task);
+    ~ThreadPool();
+
+private:
+    std::function<void()> Dequeue();
+    ThreadPool(const ThreadPool&) = delete;
+    ThreadPool& operator=(const ThreadPool&) = delete;
+};
