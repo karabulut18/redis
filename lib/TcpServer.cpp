@@ -147,6 +147,7 @@ void TcpServer::EventBased()
 
             if((ready & POLLERR) ||  (ready & POLLHUP) || conn->closeRequested())
             {
+                conn->Stop();
                 delete conn;
                 _connectionsBySocketfds.erase(_pollArgs[i].fd);
             }
@@ -188,8 +189,16 @@ void TcpServer::ThreadBased()
     }
 }
 
-void TcpServer::CleanUp() // will be advanced
+void TcpServer::CleanUp()
 {
+    TcpConnection* conn;
+    for(std::pair<int, TcpConnection*> iter : _connectionsBySocketfds)
+    {
+        conn = iter.second;
+        conn->Stop();
+        delete conn;
+    }
+    _connectionsBySocketfds.clear();
     close(_socketfd);
 }
 

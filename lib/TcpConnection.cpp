@@ -180,7 +180,7 @@ void TcpConnection::SetOwner(ITcpConnection* owner)
     _state = ClientState::OwnerSet;
 }
 
-void TcpConnection::RunThread()
+void TcpConnection::RunThread() // thread based
 {
     if (_state != ClientState::OwnerSet)
         return;
@@ -204,9 +204,12 @@ void TcpConnection::Stop()
     {
         if(_concurencyType == ConcurrencyType::EventBased)
         {
+            close(_socketfd);
+            _state = ClientState::Stopped;
             _connClose = true;
         }
-        _state = ClientState::StopRequested;
+        else
+            _state = ClientState::StopRequested;
     }
 };
 
@@ -238,6 +241,6 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
 
 TcpConnection::~TcpConnection()
 {
-    if(_state == ClientState::Running)
+    if(_state == ClientState::Running) // make sure the socket is closed
         Stop();
 }

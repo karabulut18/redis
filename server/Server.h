@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DataBase.h"
 #include "../lib/ITcpServer.h"
 #include <map>
 
@@ -15,6 +16,7 @@ class Server : public ITcpServer
     Server();
     ~Server() override;
 
+    DataBase _dataBase;
     std::map<int, Client*> _clients;
 
     void SendHeartbeat();
