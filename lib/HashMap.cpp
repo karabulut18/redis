@@ -111,3 +111,12 @@ void HashMap::help_rehashing(HashMap *hmap)
         hmap->older = HashTable{};
     }
 }
+
+void HashMap::clear(HashMap *hmap)
+{
+    if (hmap->older.table)
+        free(hmap->older.table);
+    if (hmap->newer.table)
+        free(hmap->newer.table);
+    //*hmap = HashMap{};
+}

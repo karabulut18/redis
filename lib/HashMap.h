@@ -41,4 +41,5 @@ struct HashMap
     static void         insert(HashMap *hmap, HashNode *node);
     static HashNode*    remove(HashMap *hmap, HashNode *key, bool (*eq)(HashNode *, HashNode *));
     static void         help_rehashing(HashMap *hmap);
+    static void         clear(HashMap *hmap);
 };

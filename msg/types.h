@@ -1,9 +1,7 @@
 #pragma once
 
-
-namespace msg
-{
-    enum {
-        SHORT_STRING = 0
-    };
+namespace msg {
+enum {
+  SHORT_STRING = 0,
+};
 }
