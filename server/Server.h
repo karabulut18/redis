@@ -1,25 +1,24 @@
 #pragma once
 
-#include "DataBase.h"
 #include "../lib/ITcpServer.h"
+#include "DataBase.h"
 #include <map>
 
 #define PORT 8089
- 
+
 class TcpServer;
 class TcpConnection;
 class Client;
 
 class Server : public ITcpServer
 {
-    TcpServer* _tcpServer  = nullptr;
+    TcpServer* _tcpServer = nullptr;
     Server();
     ~Server() override;
 
     DataBase _dataBase;
     std::map<int, Client*> _clients;
 
-    void SendHeartbeat();
 public:
     ITcpConnection* AcceptConnection(int id, TcpConnection* connection) override;
     static Server* Get();

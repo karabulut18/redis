@@ -22,6 +22,4 @@ public:
     void Run();
     void Send(const char* c, ssize_t size);
     void Ping();
-
-    void SendHeartbeat();
 };

@@ -2,9 +2,6 @@
 #include "../lib/Output.h"
 #include "../lib/RespParser.h"
 #include "../lib/TcpConnection.h"
-#include "../msg/shortString.h"
-#include "../msg/types.h"
-#include <signal.h>
 #include <string>
 #include <unistd.h>
 
@@ -67,15 +64,6 @@ void Client::OnDisconnect()
 {
     PUTFC_LN("Client disconnected");
 };
-
-void Client::SendHeartbeat()
-{
-    msg::shortString msg;
-    static int heartbeatCount = 0;
-    snprintf(msg._buffer, sizeof(msg._buffer), "Heartbeat %d from client", heartbeatCount++);
-    heartbeatCount = heartbeatCount % 10000;
-    _connection->Send(reinterpret_cast<char*>(&msg), sizeof(msg));
-}
 
 void Client::Send(const char* c, ssize_t size)
 {
