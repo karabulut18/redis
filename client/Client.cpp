@@ -30,10 +30,10 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t length)
         // Successfully parsed a message
         if (val.type == RespType::Array)
         {
-            if (!val.array_val.empty() && val.array_val[0].type == RespType::BulkString)
+            const auto& array = val.getArray();
+            if (!array.empty() && array[0].type == RespType::BulkString)
             {
-                std::string cmd = val.array_val[0].str_val;
-                if (cmd == "PING")
+                if (array[0].getString() == "PING")
                 {
                     PUTF_LN("Client received PING");
                     std::string reply = "+PONG\r\n";
@@ -48,7 +48,7 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t length)
         }
         else if (val.type == RespType::SimpleString)
         {
-            if (val.str_val == "PING")
+            if (val.getString() == "PING")
             {
                 std::string reply = "+PONG\r\n";
                 Send(reply.c_str(), reply.length());
@@ -120,7 +120,7 @@ void Client::Ping()
 {
     static RespValue val;
     val.type = RespType::SimpleString;
-    val.str_val = "PING";
+    val.value = "PING";
     std::string encoded = RespParser::encode(val);
     _connection->Send(encoded.c_str(), encoded.length());
 }

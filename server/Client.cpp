@@ -51,20 +51,20 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
         std::string responseString;
         if (val.type == RespType::Array)
         {
-            if (!val.array_val.empty() && val.array_val[0].type == RespType::BulkString)
+            const auto& array = val.getArray();
+            if (!array.empty() && array[0].type == RespType::BulkString)
             {
-                std::string cmd = val.array_val[0].str_val;
-                if (cmd == "PING")
+                if (array[0].getString() == "PING")
                 {
                     response.type = RespType::SimpleString;
-                    response.str_val = "PONG";
+                    response.value = "PONG";
                     responseString = RespParser::encode(response);
                     Send(responseString.c_str(), responseString.length());
                 }
                 else
                 {
                     response.type = RespType::Error;
-                    response.str_val = "ERR unknown command";
+                    response.value = "ERR unknown command";
                     responseString = RespParser::encode(response);
                     Send(responseString.c_str(), responseString.length());
                 }
@@ -72,11 +72,11 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
         }
         else if (val.type == RespType::SimpleString)
         {
-            if (val.str_val == "PING")
+            if (val.getString() == "PING")
             {
                 PUTF_LN("Server received PING");
                 response.type = RespType::SimpleString;
-                response.str_val = "PONG";
+                response.value = "PONG";
                 responseString = RespParser::encode(response);
                 Send(responseString.c_str(), responseString.length());
             }
@@ -97,7 +97,6 @@ void Client::Ping()
 {
     static RespValue val;
     val.type = RespType::SimpleString;
-    val.str_val = "PING";
-    std::string encoded = RespParser::encode(val);
-    _connection->Send(encoded.c_str(), encoded.length());
+    val.value = "PING";
+    _connection->Send(RespParser::encode(val).c_str(), RespParser::encode(val).length());
 }

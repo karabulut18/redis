@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 enum class RespType
@@ -26,15 +28,70 @@ enum class RespStatus
     Invalid
 };
 
+struct RespValue;
+
+using RespVariant = std::variant<std::monostate, std::string_view, int64_t, std::vector<RespValue>,
+                                 std::vector<std::pair<RespValue, RespValue>>, bool>;
+
 struct RespValue
 {
     RespType type = RespType::None;
-    std::string str_val;
-    int64_t int_val = 0;
-    std::vector<RespValue> array_val;
-    std::vector<std::pair<RespValue, RespValue>> map_val;
-    std::vector<RespValue> set_val;
-    bool bool_val = false;
+    RespVariant value;
+
+    // Helpers
+    int64_t& getInt()
+    {
+        return std::get<int64_t>(value);
+    }
+    const int64_t& getInt() const
+    {
+        return std::get<int64_t>(value);
+    }
+
+    std::string_view& getString()
+    {
+        return std::get<std::string_view>(value);
+    }
+    const std::string_view& getString() const
+    {
+        return std::get<std::string_view>(value);
+    }
+
+    bool& getBool()
+    {
+        return std::get<bool>(value);
+    }
+    const bool& getBool() const
+    {
+        return std::get<bool>(value);
+    }
+
+    std::vector<RespValue>& getArray()
+    {
+        return std::get<std::vector<RespValue>>(value);
+    }
+    const std::vector<RespValue>& getArray() const
+    {
+        return std::get<std::vector<RespValue>>(value);
+    }
+
+    std::vector<RespValue>& getSet()
+    {
+        return std::get<std::vector<RespValue>>(value);
+    }
+    const std::vector<RespValue>& getSet() const
+    {
+        return std::get<std::vector<RespValue>>(value);
+    }
+
+    std::vector<std::pair<RespValue, RespValue>>& getMap()
+    {
+        return std::get<std::vector<std::pair<RespValue, RespValue>>>(value);
+    }
+    const std::vector<std::pair<RespValue, RespValue>>& getMap() const
+    {
+        return std::get<std::vector<std::pair<RespValue, RespValue>>>(value);
+    }
 };
 
 class RespParser

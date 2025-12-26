@@ -21,40 +21,48 @@ std::string RespParser::encode(const RespValue& value)
     switch (value.type)
     {
     case RespType::SimpleString:
-        out += "+" + value.str_val + "\r\n";
+        out.append("+");
+        out.append(value.getString());
+        out.append("\r\n");
         break;
     case RespType::Error:
-        out += "-" + value.str_val + "\r\n";
+        out.append("-");
+        out.append(value.getString());
+        out.append("\r\n");
         break;
     case RespType::Integer:
-        out += ":" + std::to_string(value.int_val) + "\r\n";
+        out += ":" + std::to_string(value.getInt()) + "\r\n";
         break;
     case RespType::BulkString:
-        out += "$" + std::to_string(value.str_val.length()) + "\r\n" + value.str_val + "\r\n";
+        out += "$" + std::to_string(value.getString().length()) + "\r\n";
+        out.append(value.getString());
+        out.append("\r\n");
         break;
     case RespType::Null:
         out += "$-1\r\n";
         break;
     case RespType::Array:
-        out += "*" + std::to_string(value.array_val.size()) + "\r\n";
-        for (const auto& item : value.array_val)
+        out += "*" + std::to_string(value.getArray().size()) + "\r\n";
+        for (const auto& item : value.getArray())
             out += encode(item);
         break;
     case RespType::Map:
-        out += "%" + std::to_string(value.map_val.size()) + "\r\n";
-        for (const auto& item : value.map_val)
+        out += "%" + std::to_string(value.getMap().size()) + "\r\n";
+        for (const auto& item : value.getMap())
             out += encode(item.first) + encode(item.second);
         break;
     case RespType::Set:
-        out += "~" + std::to_string(value.set_val.size()) + "\r\n";
-        for (const auto& item : value.set_val)
+        out += "~" + std::to_string(value.getSet().size()) + "\r\n";
+        for (const auto& item : value.getSet())
             out += encode(item);
         break;
     case RespType::Boolean:
-        out += "#" + std::string(value.bool_val ? "t" : "f") + "\r\n";
+        out += "#" + std::string(value.getBool() ? "t" : "f") + "\r\n";
         break;
     case RespType::BigNumber:
-        out += "(" + value.str_val + "\r\n";
+        out.append("(");
+        out.append(value.getString());
+        out.append("\r\n");
         break;
     default:
         break;
@@ -104,7 +112,7 @@ RespStatus RespParser::parseSimpleString(const char* data, size_t length, RespVa
         return RespStatus::Incomplete;
 
     result.type = RespType::SimpleString;
-    result.str_val = std::string(data + 1, crlfPos - 1);
+    result.value = std::string_view(data + 1, crlfPos - 1);
 
     bytesRead = crlfPos + 2; // +2 for \r\n
     return RespStatus::Ok;
@@ -117,7 +125,7 @@ RespStatus RespParser::parseError(const char* data, size_t length, RespValue& re
         return RespStatus::Incomplete;
 
     result.type = RespType::Error;
-    result.str_val = std::string(data + 1, crlfPos - 1);
+    result.value = std::string_view(data + 1, crlfPos - 1);
 
     bytesRead = crlfPos + 2;
     return RespStatus::Ok;
@@ -129,18 +137,18 @@ RespStatus RespParser::parseInteger(const char* data, size_t length, RespValue& 
     if (!findCRLF(data, length, crlfPos))
         return RespStatus::Incomplete;
 
-    result.type = RespType::Integer;
     std::string intStr(data + 1, crlfPos - 1);
 
     try
     {
-        result.int_val = std::stoll(intStr);
+        result.value = std::stoll(intStr);
     }
     catch (...)
     {
         return RespStatus::Invalid;
     }
 
+    result.type = RespType::Integer; // Moved type assignment after parsing to ensure it's only set on success
     bytesRead = crlfPos + 2;
     return RespStatus::Ok;
 }
@@ -182,7 +190,7 @@ RespStatus RespParser::parseBulkString(const char* data, size_t length, RespValu
     }
 
     result.type = RespType::BulkString;
-    result.str_val = std::string(data + contentStart, bulkLen);
+    result.value = std::string_view(data + contentStart, bulkLen);
 
     bytesRead = totalNeeded;
     return RespStatus::Ok;
@@ -192,7 +200,9 @@ RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& re
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
+    {
         return RespStatus::Incomplete;
+    }
 
     std::string countStr(data + 1, crlfPos - 1);
     int64_t count = 0;
@@ -216,8 +226,9 @@ RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& re
         return RespStatus::Invalid;
 
     result.type = RespType::Array;
-    result.array_val.clear();
-    result.array_val.reserve(count);
+    // Keep temporary vector to build array
+    std::vector<RespValue> elements;
+    elements.reserve(count);
 
     size_t currentPos = crlfPos + 2;
     for (int64_t i = 0; i < count; ++i)
@@ -233,10 +244,11 @@ RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& re
             return status; // Incomplete or Invalid
         }
 
-        result.array_val.push_back(std::move(element));
+        elements.push_back(std::move(element));
         currentPos += elemBytes;
     }
 
+    result.value = std::move(elements);
     bytesRead = currentPos;
     return RespStatus::Ok;
 }
@@ -245,7 +257,9 @@ RespStatus RespParser::parseMap(const char* data, size_t length, RespValue& resu
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
+    {
         return RespStatus::Incomplete;
+    }
 
     std::string countStr(data + 1, crlfPos - 1);
     int64_t count = 0;
@@ -269,8 +283,9 @@ RespStatus RespParser::parseMap(const char* data, size_t length, RespValue& resu
         return RespStatus::Invalid;
 
     result.type = RespType::Map;
-    result.map_val.clear();
-    result.map_val.reserve(count);
+    // Temporary map vector
+    std::vector<std::pair<RespValue, RespValue>> map_val;
+    map_val.reserve(count);
 
     size_t currentPos = crlfPos + 2;
     for (int64_t i = 0; i < count; ++i)
@@ -291,10 +306,11 @@ RespStatus RespParser::parseMap(const char* data, size_t length, RespValue& resu
         if (status != RespStatus::Ok)
             return status;
 
-        result.map_val.push_back(std::make_pair(key, value));
+        map_val.push_back(std::make_pair(key, value));
         currentPos += elemBytes;
     }
 
+    result.value = std::move(map_val);
     bytesRead = currentPos;
     return RespStatus::Ok;
 }
@@ -327,8 +343,9 @@ RespStatus RespParser::parseSet(const char* data, size_t length, RespValue& resu
         return RespStatus::Invalid;
 
     result.type = RespType::Set;
-    result.set_val.clear();
-    result.set_val.reserve(count);
+    // Temporary set vector
+    std::vector<RespValue> elements;
+    elements.reserve(count);
 
     size_t currentPos = crlfPos + 2;
     for (int64_t i = 0; i < count; ++i)
@@ -344,10 +361,11 @@ RespStatus RespParser::parseSet(const char* data, size_t length, RespValue& resu
             return status; // Incomplete or Invalid
         }
 
-        result.set_val.push_back(std::move(element));
+        elements.push_back(std::move(element));
         currentPos += elemBytes;
     }
 
+    result.value = std::move(elements);
     bytesRead = currentPos;
     return RespStatus::Ok;
 }
@@ -363,14 +381,16 @@ RespStatus RespParser::parseBoolean(const char* data, size_t length, RespValue& 
         return RespStatus::Invalid;
 
     char val = data[1];
+    long valToStore = 0;
     if (val == 't')
-        result.bool_val = true;
+        valToStore = 1;
     else if (val == 'f')
-        result.bool_val = false;
+        valToStore = 0;
     else
         return RespStatus::Invalid;
 
     result.type = RespType::Boolean;
+    result.value = (bool)valToStore;
     bytesRead = crlfPos + 2;
     return RespStatus::Ok;
 }
@@ -382,7 +402,7 @@ RespStatus RespParser::parseBigNumber(const char* data, size_t length, RespValue
         return RespStatus::Incomplete;
 
     result.type = RespType::BigNumber;
-    result.str_val = std::string(data + 1, crlfPos - 1);
+    result.value = std::string_view(data + 1, crlfPos - 1);
 
     bytesRead = crlfPos + 2;
     return RespStatus::Ok;
