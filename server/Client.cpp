@@ -95,6 +95,9 @@ void Client::OnDisconnect()
 
 void Client::Ping()
 {
-    static RespValue val = {RespType::SimpleString, "PING", 0, {}};
-    _connection->Send(RespParser::encode(val).c_str(), RespParser::encode(val).length());
+    static RespValue val;
+    val.type = RespType::SimpleString;
+    val.str_val = "PING";
+    std::string encoded = RespParser::encode(val);
+    _connection->Send(encoded.c_str(), encoded.length());
 }

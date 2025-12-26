@@ -38,9 +38,23 @@ std::string RespParser::encode(const RespValue& value)
     case RespType::Array:
         out += "*" + std::to_string(value.array_val.size()) + "\r\n";
         for (const auto& item : value.array_val)
-        {
             out += encode(item);
-        }
+        break;
+    case RespType::Map:
+        out += "%" + std::to_string(value.map_val.size()) + "\r\n";
+        for (const auto& item : value.map_val)
+            out += encode(item.first) + encode(item.second);
+        break;
+    case RespType::Set:
+        out += "~" + std::to_string(value.set_val.size()) + "\r\n";
+        for (const auto& item : value.set_val)
+            out += encode(item);
+        break;
+    case RespType::Boolean:
+        out += "#" + std::string(value.bool_val ? "t" : "f") + "\r\n";
+        break;
+    case RespType::BigNumber:
+        out += "(" + value.str_val + "\r\n";
         break;
     default:
         break;
@@ -48,11 +62,14 @@ std::string RespParser::encode(const RespValue& value)
     return out;
 }
 
-RespStatus RespParser::decode(const char* data, size_t length, RespValue& result, size_t& bytesRead)
+RespStatus RespParser::decode(const char* data, size_t length, RespValue& result, size_t& bytesRead, size_t depth)
 {
     bytesRead = 0;
     if (length == 0)
         return RespStatus::Incomplete;
+
+    if (depth > MAX_RECURSION_DEPTH)
+        return RespStatus::Invalid;
 
     char type = data[0];
     switch (type)
@@ -66,7 +83,15 @@ RespStatus RespParser::decode(const char* data, size_t length, RespValue& result
     case '$':
         return parseBulkString(data, length, result, bytesRead);
     case '*':
-        return parseArray(data, length, result, bytesRead);
+        return parseArray(data, length, result, bytesRead, depth);
+    case '%':
+        return parseMap(data, length, result, bytesRead, depth);
+    case '~':
+        return parseSet(data, length, result, bytesRead, depth);
+    case '#':
+        return parseBoolean(data, length, result, bytesRead);
+    case '(':
+        return parseBigNumber(data, length, result, bytesRead);
     default:
         return RespStatus::Invalid;
     }
@@ -76,9 +101,7 @@ RespStatus RespParser::parseSimpleString(const char* data, size_t length, RespVa
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
-    {
         return RespStatus::Incomplete;
-    }
 
     result.type = RespType::SimpleString;
     result.str_val = std::string(data + 1, crlfPos - 1);
@@ -91,9 +114,7 @@ RespStatus RespParser::parseError(const char* data, size_t length, RespValue& re
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
-    {
         return RespStatus::Incomplete;
-    }
 
     result.type = RespType::Error;
     result.str_val = std::string(data + 1, crlfPos - 1);
@@ -106,9 +127,7 @@ RespStatus RespParser::parseInteger(const char* data, size_t length, RespValue& 
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
-    {
         return RespStatus::Incomplete;
-    }
 
     result.type = RespType::Integer;
     std::string intStr(data + 1, crlfPos - 1);
@@ -130,9 +149,7 @@ RespStatus RespParser::parseBulkString(const char* data, size_t length, RespValu
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
-    {
         return RespStatus::Incomplete;
-    }
 
     std::string lenStr(data + 1, crlfPos - 1);
     int64_t bulkLen = 0;
@@ -147,7 +164,7 @@ RespStatus RespParser::parseBulkString(const char* data, size_t length, RespValu
 
     if (bulkLen == -1)
     {
-        result.type = RespType::Null; // RESP2 Null Bulk String
+        result.type = RespType::Null;
         bytesRead = crlfPos + 2;
         return RespStatus::Ok;
     }
@@ -171,13 +188,11 @@ RespStatus RespParser::parseBulkString(const char* data, size_t length, RespValu
     return RespStatus::Ok;
 }
 
-RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& result, size_t& bytesRead)
+RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& result, size_t& bytesRead, size_t depth)
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
-    {
         return RespStatus::Incomplete;
-    }
 
     std::string countStr(data + 1, crlfPos - 1);
     int64_t count = 0;
@@ -210,8 +225,8 @@ RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& re
         RespValue element;
         size_t elemBytes = 0;
 
-        // Recursive call
-        RespStatus status = decode(data + currentPos, length - currentPos, element, elemBytes);
+        // Recursive call with depth + 1
+        RespStatus status = decode(data + currentPos, length - currentPos, element, elemBytes, depth + 1);
 
         if (status != RespStatus::Ok)
         {
@@ -223,5 +238,152 @@ RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& re
     }
 
     bytesRead = currentPos;
+    return RespStatus::Ok;
+}
+
+RespStatus RespParser::parseMap(const char* data, size_t length, RespValue& result, size_t& bytesRead, size_t depth)
+{
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+        return RespStatus::Incomplete;
+
+    std::string countStr(data + 1, crlfPos - 1);
+    int64_t count = 0;
+    try
+    {
+        count = std::stoll(countStr);
+    }
+    catch (...)
+    {
+        return RespStatus::Invalid;
+    }
+
+    if (count == -1)
+    {
+        result.type = RespType::Null;
+        bytesRead = crlfPos + 2;
+        return RespStatus::Ok;
+    }
+
+    if (count < 0)
+        return RespStatus::Invalid;
+
+    result.type = RespType::Map;
+    result.map_val.clear();
+    result.map_val.reserve(count);
+
+    size_t currentPos = crlfPos + 2;
+    for (int64_t i = 0; i < count; ++i)
+    {
+        RespValue element;
+        size_t elemBytes = 0;
+
+        // Recursive call with depth + 1
+        RespValue key;
+        RespValue value;
+        RespStatus status = decode(data + currentPos, length - currentPos, key, elemBytes, depth + 1);
+
+        if (status != RespStatus::Ok)
+            return status;
+        currentPos += elemBytes;
+
+        status = decode(data + currentPos, length - currentPos, value, elemBytes, depth + 1);
+        if (status != RespStatus::Ok)
+            return status;
+
+        result.map_val.push_back(std::make_pair(key, value));
+        currentPos += elemBytes;
+    }
+
+    bytesRead = currentPos;
+    return RespStatus::Ok;
+}
+
+RespStatus RespParser::parseSet(const char* data, size_t length, RespValue& result, size_t& bytesRead, size_t depth)
+{
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+        return RespStatus::Incomplete;
+
+    std::string countStr(data + 1, crlfPos - 1);
+    int64_t count = 0;
+    try
+    {
+        count = std::stoll(countStr);
+    }
+    catch (...)
+    {
+        return RespStatus::Invalid;
+    }
+
+    if (count == -1)
+    {
+        result.type = RespType::Null; // RESP2 Null Array
+        bytesRead = crlfPos + 2;
+        return RespStatus::Ok;
+    }
+
+    if (count < 0)
+        return RespStatus::Invalid;
+
+    result.type = RespType::Set;
+    result.set_val.clear();
+    result.set_val.reserve(count);
+
+    size_t currentPos = crlfPos + 2;
+    for (int64_t i = 0; i < count; ++i)
+    {
+        RespValue element;
+        size_t elemBytes = 0;
+
+        // Recursive call with depth + 1
+        RespStatus status = decode(data + currentPos, length - currentPos, element, elemBytes, depth + 1);
+
+        if (status != RespStatus::Ok)
+        {
+            return status; // Incomplete or Invalid
+        }
+
+        result.set_val.push_back(std::move(element));
+        currentPos += elemBytes;
+    }
+
+    bytesRead = currentPos;
+    return RespStatus::Ok;
+}
+
+RespStatus RespParser::parseBoolean(const char* data, size_t length, RespValue& result, size_t& bytesRead)
+{
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+        return RespStatus::Incomplete;
+
+    // data[0] is '#', value is at data[1]
+    if (crlfPos != 2) // Should be #t\r\n (pos 2) or #f\r\n
+        return RespStatus::Invalid;
+
+    char val = data[1];
+    if (val == 't')
+        result.bool_val = true;
+    else if (val == 'f')
+        result.bool_val = false;
+    else
+        return RespStatus::Invalid;
+
+    result.type = RespType::Boolean;
+    bytesRead = crlfPos + 2;
+    return RespStatus::Ok;
+}
+
+RespStatus RespParser::parseBigNumber(const char* data, size_t length, RespValue& result, size_t& bytesRead)
+{
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+        return RespStatus::Incomplete;
+
+    result.type = RespType::BigNumber;
+    result.str_val = std::string(data + 1, crlfPos - 1);
+
+    bytesRead = crlfPos + 2;
     return RespStatus::Ok;
 }
