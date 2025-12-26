@@ -2,7 +2,7 @@
 #include <cstring>
 #include <string>
 
-bool RespParser::findCRLF(const char *data, size_t length, size_t &pos)
+bool RespParser::findCRLF(const char* data, size_t length, size_t& pos)
 {
     for (size_t i = 0; i < length - 1; ++i)
     {
@@ -15,7 +15,40 @@ bool RespParser::findCRLF(const char *data, size_t length, size_t &pos)
     return false;
 }
 
-RespStatus RespParser::decode(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+std::string RespParser::encode(const RespValue& value)
+{
+    std::string out;
+    switch (value.type)
+    {
+    case RespType::SimpleString:
+        out += "+" + value.str_val + "\r\n";
+        break;
+    case RespType::Error:
+        out += "-" + value.str_val + "\r\n";
+        break;
+    case RespType::Integer:
+        out += ":" + std::to_string(value.int_val) + "\r\n";
+        break;
+    case RespType::BulkString:
+        out += "$" + std::to_string(value.str_val.length()) + "\r\n" + value.str_val + "\r\n";
+        break;
+    case RespType::Null:
+        out += "$-1\r\n";
+        break;
+    case RespType::Array:
+        out += "*" + std::to_string(value.array_val.size()) + "\r\n";
+        for (const auto& item : value.array_val)
+        {
+            out += encode(item);
+        }
+        break;
+    default:
+        break;
+    }
+    return out;
+}
+
+RespStatus RespParser::decode(const char* data, size_t length, RespValue& result, size_t& bytesRead)
 {
     bytesRead = 0;
     if (length == 0)
@@ -39,7 +72,7 @@ RespStatus RespParser::decode(const char *data, size_t length, RespValue &result
     }
 }
 
-RespStatus RespParser::parseSimpleString(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+RespStatus RespParser::parseSimpleString(const char* data, size_t length, RespValue& result, size_t& bytesRead)
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
@@ -54,7 +87,7 @@ RespStatus RespParser::parseSimpleString(const char *data, size_t length, RespVa
     return RespStatus::Ok;
 }
 
-RespStatus RespParser::parseError(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+RespStatus RespParser::parseError(const char* data, size_t length, RespValue& result, size_t& bytesRead)
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
@@ -69,7 +102,7 @@ RespStatus RespParser::parseError(const char *data, size_t length, RespValue &re
     return RespStatus::Ok;
 }
 
-RespStatus RespParser::parseInteger(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+RespStatus RespParser::parseInteger(const char* data, size_t length, RespValue& result, size_t& bytesRead)
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
@@ -93,7 +126,7 @@ RespStatus RespParser::parseInteger(const char *data, size_t length, RespValue &
     return RespStatus::Ok;
 }
 
-RespStatus RespParser::parseBulkString(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+RespStatus RespParser::parseBulkString(const char* data, size_t length, RespValue& result, size_t& bytesRead)
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))
@@ -138,7 +171,7 @@ RespStatus RespParser::parseBulkString(const char *data, size_t length, RespValu
     return RespStatus::Ok;
 }
 
-RespStatus RespParser::parseArray(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+RespStatus RespParser::parseArray(const char* data, size_t length, RespValue& result, size_t& bytesRead)
 {
     size_t crlfPos;
     if (!findCRLF(data, length, crlfPos))

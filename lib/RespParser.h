@@ -38,16 +38,19 @@ public:
     // Parses a single RESP message from the buffer.
     // [out] result: The parsed value.
     // [out] bytesRead: Number of bytes consumed from buffer.
-    RespStatus decode(const char *data, size_t length, RespValue &result, size_t &bytesRead);
+    RespStatus decode(const char* data, size_t length, RespValue& result, size_t& bytesRead);
+
+    // Encodes a RespValue into a RESP string (for sending).
+    static std::string encode(const RespValue& value);
 
 private:
     // Helper to find CRLF in buffer
-    bool findCRLF(const char *data, size_t length, size_t &pos);
+    bool findCRLF(const char* data, size_t length, size_t& pos);
 
     // Parsers for individual types
-    RespStatus parseSimpleString(const char *data, size_t length, RespValue &result, size_t &bytesRead);
-    RespStatus parseError(const char *data, size_t length, RespValue &result, size_t &bytesRead);
-    RespStatus parseInteger(const char *data, size_t length, RespValue &result, size_t &bytesRead);
-    RespStatus parseBulkString(const char *data, size_t length, RespValue &result, size_t &bytesRead);
-    RespStatus parseArray(const char *data, size_t length, RespValue &result, size_t &bytesRead);
+    RespStatus parseSimpleString(const char* data, size_t length, RespValue& result, size_t& bytesRead);
+    RespStatus parseError(const char* data, size_t length, RespValue& result, size_t& bytesRead);
+    RespStatus parseInteger(const char* data, size_t length, RespValue& result, size_t& bytesRead);
+    RespStatus parseBulkString(const char* data, size_t length, RespValue& result, size_t& bytesRead);
+    RespStatus parseArray(const char* data, size_t length, RespValue& result, size_t& bytesRead);
 };

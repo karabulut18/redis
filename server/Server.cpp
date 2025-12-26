@@ -1,15 +1,13 @@
 #include <signal.h>
 
-#include "Server.h"
-#include "../lib/TcpServer.h"
-#include "../lib/TcpConnection.h"
-#include "Client.h"
-#include <unistd.h>
-#include "../msg/types.h"
-#include "../msg/shortString.h"
 #include "../lib/Output.h"
-
-
+#include "../lib/TcpConnection.h"
+#include "../lib/TcpServer.h"
+#include "../msg/shortString.h"
+#include "../msg/types.h"
+#include "Client.h"
+#include "Server.h"
+#include <unistd.h>
 
 Server* Server::Get()
 {
@@ -41,20 +39,18 @@ void Server::SendHeartbeat()
 {
     static int heartbeatCount = 0;
     msg::shortString msg;
-    snprintf(msg._buffer, sizeof(msg._buffer),"Heartbeat %d from server", heartbeatCount++);
+    snprintf(msg._buffer, sizeof(msg._buffer), "Heartbeat %d from server", heartbeatCount++);
 
-    for(std::pair<int, Client*> iterator : _clients)
+    for (std::pair<int, Client*> iterator : _clients)
         iterator.second->Send(reinterpret_cast<char*>(&msg), sizeof(msg));
 
-    heartbeatCount = heartbeatCount%10000;
+    heartbeatCount = heartbeatCount % 10000;
 }
-
 
 Server::~Server()
 {
     delete _tcpServer;
 };
-
 
 bool Server::IsRunning()
 {
@@ -80,10 +76,10 @@ void signal_handler(int signum)
 
 void Server::Run()
 {
-    while(_tcpServer->IsRunning())
+    while (_tcpServer->IsRunning())
     {
         sleep(1);
-        SendHeartbeat();
+        // SendHeartbeat();
     }
     PUTF_LN("Server stopped\n");
 }

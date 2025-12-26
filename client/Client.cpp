@@ -1,5 +1,6 @@
 #include "Client.h"
 #include "../lib/Output.h"
+#include "../lib/RespParser.h"
 #include "../lib/TcpConnection.h"
 #include "../msg/shortString.h"
 #include "../msg/types.h"
@@ -7,20 +8,59 @@
 #include <string>
 #include <unistd.h>
 
-size_t Client::OnMessageReceive(const char *buffer, m_size_t length)
+size_t Client::OnMessageReceive(const char* buffer, m_size_t length)
 {
-    const msg::header *hdr = reinterpret_cast<const msg::header *>(buffer);
-    switch (hdr->_type)
+    size_t totalConsumed = 0;
+    while (totalConsumed < length)
     {
-    case msg::SHORT_STRING:
-    {
-        const msg::shortString *msg = reinterpret_cast<const msg::shortString *>(buffer);
-        PUTF("message:\n" + std::string(msg->_buffer) + "\n");
+        RespValue val;
+        size_t bytesRead = 0;
+        RespStatus status = _parser->decode(buffer + totalConsumed, length - totalConsumed, val, bytesRead);
+
+        if (status == RespStatus::Incomplete)
+        {
+            break;
+        }
+        else if (status == RespStatus::Invalid)
+        {
+            // Protocol error, maybe close connection?
+            PUTF_LN("Invalid RESP protocol");
+            // Consume 1 byte to try to recover/skip? or just close?
+            // For now, let's close or just consume everything to avoid loop
+            return length; // Consume all to drop invalid packet
+        }
+
+        // Successfully parsed a message
+        if (val.type == RespType::Array)
+        {
+            if (!val.array_val.empty() && val.array_val[0].type == RespType::BulkString)
+            {
+                std::string cmd = val.array_val[0].str_val;
+                if (cmd == "PING")
+                {
+                    PUTF_LN("Client received PING");
+                    std::string reply = "+PONG\r\n";
+                    Send(reply.c_str(), reply.length());
+                }
+                else
+                {
+                    std::string reply = "-ERR unknown command\r\n";
+                    Send(reply.c_str(), reply.length());
+                }
+            }
+        }
+        else if (val.type == RespType::SimpleString)
+        {
+            if (val.str_val == "PING")
+            {
+                std::string reply = "+PONG\r\n";
+                Send(reply.c_str(), reply.length());
+            }
+        }
+
+        totalConsumed += bytesRead;
     }
-    default:
-        break;
-    };
-    return length; // Consume everything (mock)
+    return totalConsumed;
 };
 
 void Client::OnDisconnect()
@@ -34,18 +74,24 @@ void Client::SendHeartbeat()
     static int heartbeatCount = 0;
     snprintf(msg._buffer, sizeof(msg._buffer), "Heartbeat %d from client", heartbeatCount++);
     heartbeatCount = heartbeatCount % 10000;
-    _connection->Send(reinterpret_cast<char *>(&msg), sizeof(msg));
+    _connection->Send(reinterpret_cast<char*>(&msg), sizeof(msg));
 }
 
-Client *Client::Get()
+void Client::Send(const char* c, ssize_t size)
 {
-    static Client *instance = new Client();
+    _connection->Send(c, size);
+}
+
+Client* Client::Get()
+{
+    static Client* instance = new Client();
     return instance;
 }
 
 Client::~Client()
 {
     delete _connection;
+    delete _parser;
 }
 
 Client::Client()
@@ -55,6 +101,7 @@ Client::Client()
 
 bool Client::Init()
 {
+    _parser = new RespParser();
     _connection->SetOwner(this);
     PUTFC_LN("Client Created");
     return _connection->Init(ConcurrencyType::ThreadBased);
@@ -75,9 +122,16 @@ void Client::Run()
     while (_connection->IsRunning())
     {
         sleep(1);
-        SendHeartbeat();
+        // SendHeartbeat();
+        Ping();
     }
     PUTFC_LN("Client stopped");
+}
+
+void Client::Ping()
+{
+    static RespValue val = {RespType::SimpleString, "PING", 0, {}};
+    _connection->Send(RespParser::encode(val).c_str(), RespParser::encode(val).length());
 }
 
 void signal_handler(int signum)
@@ -86,7 +140,7 @@ void signal_handler(int signum)
         Client::Get()->Stop();
 }
 
-int main()
+int main(int argc, char* argv[])
 {
     Output::GetInstance()->Init("redis_client");
 
