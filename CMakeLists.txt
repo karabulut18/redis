@@ -12,4 +12,4 @@ add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 # Include subdirectories
 add_subdirectory(lib)
 add_subdirectory(server)
-# add_subdirectory(client) # Enable this when you want to build the client
+add_subdirectory(client)

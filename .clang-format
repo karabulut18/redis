@@ -7,3 +7,5 @@ ColumnLimit: 120
 AccessModifierOffset: -4
 NamespaceIndentation: All
 FixNamespaceComments: true
+PointerAlignment: Left
+#DerivePointerAlignment: false

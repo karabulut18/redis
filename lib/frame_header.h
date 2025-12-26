@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #define TCP_MAX_MESSAGE_SIZE 8 * 1024
+// framing not used for now
 #define SIZE_VARIABLE_LENGTH sizeof(m_size_t)
 
 typedef uint64_t m_size_t;

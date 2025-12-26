@@ -1,29 +1,29 @@
-#include "../lib/TcpConnection.h"
 #include "Client.h"
-#include <unistd.h>
-#include <signal.h>
-#include "../msg/types.h"
-#include "../msg/shortString.h"
 #include "../lib/Output.h"
+#include "../lib/TcpConnection.h"
+#include "../msg/shortString.h"
+#include "../msg/types.h"
+#include <signal.h>
 #include <string>
+#include <unistd.h>
 
-
-void Client::OnMessageReceive(const char* buffer, m_size_t length) 
+size_t Client::OnMessageReceive(const char *buffer, m_size_t length)
 {
-    const msg::header* hdr = reinterpret_cast<const msg::header*>(buffer);
-    switch(hdr->_type)
+    const msg::header *hdr = reinterpret_cast<const msg::header *>(buffer);
+    switch (hdr->_type)
     {
-        case msg::SHORT_STRING:
-        {
-            const msg::shortString* msg = reinterpret_cast<const msg::shortString*>(buffer);
-            PUTF("message:\n" + std::string(msg->_buffer) + "\n");
-        }
-        default:
-            break;
+    case msg::SHORT_STRING:
+    {
+        const msg::shortString *msg = reinterpret_cast<const msg::shortString *>(buffer);
+        PUTF("message:\n" + std::string(msg->_buffer) + "\n");
+    }
+    default:
+        break;
     };
+    return length; // Consume everything (mock)
 };
 
-void Client::OnDisconnect() 
+void Client::OnDisconnect()
 {
     PUTFC_LN("Client disconnected");
 };
@@ -32,23 +32,23 @@ void Client::SendHeartbeat()
 {
     msg::shortString msg;
     static int heartbeatCount = 0;
-    snprintf(msg._buffer, sizeof(msg._buffer),"Heartbeat %d from client", heartbeatCount++);
-    heartbeatCount = heartbeatCount%10000;
-    _connection->Send(reinterpret_cast<char*>(&msg), sizeof(msg));
+    snprintf(msg._buffer, sizeof(msg._buffer), "Heartbeat %d from client", heartbeatCount++);
+    heartbeatCount = heartbeatCount % 10000;
+    _connection->Send(reinterpret_cast<char *>(&msg), sizeof(msg));
 }
 
-Client* Client::Get()
+Client *Client::Get()
 {
-    static Client* instance = new Client();
+    static Client *instance = new Client();
     return instance;
 }
 
-Client::~Client() 
+Client::~Client()
 {
     delete _connection;
 }
 
-Client::Client() 
+Client::Client()
 {
     _connection = TcpConnection::CreateFromPortAndIp(DEFAULT_PORT, DEFAULT_IP);
 }
@@ -72,7 +72,7 @@ void Client::Stop()
 
 void Client::Run()
 {
-    while(_connection->IsRunning())
+    while (_connection->IsRunning())
     {
         sleep(1);
         SendHeartbeat();

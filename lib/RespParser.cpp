@@ -1,91 +1,194 @@
 #include "RespParser.h"
-#include <_types/_uint8_t.h>
-#include <sys/types.h>
+#include <cstring>
+#include <string>
 
-bool RespParser::parse(const char *data)
+bool RespParser::findCRLF(const char *data, size_t length, size_t &pos)
 {
-    uint64_t index = 0;
-    uint8_t tag = data[index++];
-    const char *payload = data + index;
-
-    switch (tag)
+    for (size_t i = 0; i < length - 1; ++i)
     {
-    case TAG_NIL:
-        parse_null(payload);
-        break;
-    case TAG_ERR:
-        parse_error(payload);
-        break;
-    case TAG_STR:
-        parse_string(payload);
-        break;
-    case TAG_INT:
-        parse_int(payload);
-        break;
-    case TAG_DBL:
-        parse_double(payload);
-        break;
-    case TAG_ARR:
-        parse_array(payload);
-        break;
-    default:
-        return false;
+        if (data[i] == '\r' && data[i + 1] == '\n')
+        {
+            pos = i;
+            return true;
+        }
     }
-    return true;
-};
-
-void RespParser::parse_null(const char *data)
-{
-    _callbackOwner->on_null();
+    return false;
 }
 
-void RespParser::parse_error(const char *data)
+RespStatus RespParser::decode(const char *data, size_t length, RespValue &result, size_t &bytesRead)
 {
-    uint64_t index = 0;
-    uint8_t errorTag = data[index++];
-    uint64_t errorMessagelength = 0;
-    memcpy(&errorMessagelength, data, sizeof(errorMessagelength));
-    index += sizeof(errorMessagelength);
-    char *errorMessage = (char *)calloc(errorMessagelength + 1, sizeof(char));
-    memcpy(errorMessage, data + index, errorMessagelength);
-    _callbackOwner->on_error(errorTag, errorMessagelength, errorMessage);
-    free(errorMessage);
+    bytesRead = 0;
+    if (length == 0)
+        return RespStatus::Incomplete;
+
+    char type = data[0];
+    switch (type)
+    {
+    case '+':
+        return parseSimpleString(data, length, result, bytesRead);
+    case '-':
+        return parseError(data, length, result, bytesRead);
+    case ':':
+        return parseInteger(data, length, result, bytesRead);
+    case '$':
+        return parseBulkString(data, length, result, bytesRead);
+    case '*':
+        return parseArray(data, length, result, bytesRead);
+    default:
+        return RespStatus::Invalid;
+    }
 }
 
-void RespParser::parse_string(const char *data)
+RespStatus RespParser::parseSimpleString(const char *data, size_t length, RespValue &result, size_t &bytesRead)
 {
-    uint64_t index = 0;
-    uint64_t stringLength = 0;
-    memcpy(&stringLength, data, sizeof(stringLength));
-    index += sizeof(stringLength);
-    char *stringBuff = (char *)calloc(stringLength + 1, sizeof(char));
-    memcpy(stringBuff, data + index, stringLength);
-    _callbackOwner->on_str(stringLength, stringBuff);
-    free(stringBuff);
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+    {
+        return RespStatus::Incomplete;
+    }
+
+    result.type = RespType::SimpleString;
+    result.str_val = std::string(data + 1, crlfPos - 1);
+
+    bytesRead = crlfPos + 2; // +2 for \r\n
+    return RespStatus::Ok;
 }
 
-void RespParser::parse_int(const char *data)
+RespStatus RespParser::parseError(const char *data, size_t length, RespValue &result, size_t &bytesRead)
 {
-    int64_t number = 0;
-    memcpy(&number, data, sizeof(number));
-    _callbackOwner->on_int(number);
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+    {
+        return RespStatus::Incomplete;
+    }
+
+    result.type = RespType::Error;
+    result.str_val = std::string(data + 1, crlfPos - 1);
+
+    bytesRead = crlfPos + 2;
+    return RespStatus::Ok;
 }
 
-void RespParser::parse_double(const char *data)
+RespStatus RespParser::parseInteger(const char *data, size_t length, RespValue &result, size_t &bytesRead)
 {
-    double_t number = 0;
-    memcpy(&number, data, sizeof(number));
-    _callbackOwner->on_dbl(number);
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+    {
+        return RespStatus::Incomplete;
+    }
+
+    result.type = RespType::Integer;
+    std::string intStr(data + 1, crlfPos - 1);
+
+    try
+    {
+        result.int_val = std::stoll(intStr);
+    }
+    catch (...)
+    {
+        return RespStatus::Invalid;
+    }
+
+    bytesRead = crlfPos + 2;
+    return RespStatus::Ok;
 }
 
-void RespParser::parse_array(const char *data)
+RespStatus RespParser::parseBulkString(const char *data, size_t length, RespValue &result, size_t &bytesRead)
 {
-    uint64_t arrayLength = 0;
-    uint64_t index = 0;
-    memcpy(&arrayLength, data, sizeof(arrayLength));
-    index += sizeof(arrayLength);
-    int64_t *array = (int64_t *)calloc(arrayLength, sizeof(int64_t));
-    memcpy(array, data + index, arrayLength);
-    _callbackOwner->on_arr(arrayLength, array);
-    free(array);
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+    {
+        return RespStatus::Incomplete;
+    }
+
+    std::string lenStr(data + 1, crlfPos - 1);
+    int64_t bulkLen = 0;
+    try
+    {
+        bulkLen = std::stoll(lenStr);
+    }
+    catch (...)
+    {
+        return RespStatus::Invalid;
+    }
+
+    if (bulkLen == -1)
+    {
+        result.type = RespType::Null; // RESP2 Null Bulk String
+        bytesRead = crlfPos + 2;
+        return RespStatus::Ok;
+    }
+
+    if (bulkLen < 0)
+        return RespStatus::Invalid;
+
+    // Check if we have enough data: header + \r\n + content + \r\n
+    size_t contentStart = crlfPos + 2;
+    size_t totalNeeded = contentStart + bulkLen + 2;
+
+    if (length < totalNeeded)
+    {
+        return RespStatus::Incomplete;
+    }
+
+    result.type = RespType::BulkString;
+    result.str_val = std::string(data + contentStart, bulkLen);
+
+    bytesRead = totalNeeded;
+    return RespStatus::Ok;
+}
+
+RespStatus RespParser::parseArray(const char *data, size_t length, RespValue &result, size_t &bytesRead)
+{
+    size_t crlfPos;
+    if (!findCRLF(data, length, crlfPos))
+    {
+        return RespStatus::Incomplete;
+    }
+
+    std::string countStr(data + 1, crlfPos - 1);
+    int64_t count = 0;
+    try
+    {
+        count = std::stoll(countStr);
+    }
+    catch (...)
+    {
+        return RespStatus::Invalid;
+    }
+
+    if (count == -1)
+    {
+        result.type = RespType::Null; // RESP2 Null Array
+        bytesRead = crlfPos + 2;
+        return RespStatus::Ok;
+    }
+
+    if (count < 0)
+        return RespStatus::Invalid;
+
+    result.type = RespType::Array;
+    result.array_val.clear();
+    result.array_val.reserve(count);
+
+    size_t currentPos = crlfPos + 2;
+    for (int64_t i = 0; i < count; ++i)
+    {
+        RespValue element;
+        size_t elemBytes = 0;
+
+        // Recursive call
+        RespStatus status = decode(data + currentPos, length - currentPos, element, elemBytes);
+
+        if (status != RespStatus::Ok)
+        {
+            return status; // Incomplete or Invalid
+        }
+
+        result.array_val.push_back(std::move(element));
+        currentPos += elemBytes;
+    }
+
+    bytesRead = currentPos;
+    return RespStatus::Ok;
 }

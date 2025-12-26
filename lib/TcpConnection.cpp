@@ -1,16 +1,16 @@
 #include "TcpConnection.h"
 
-#include <string.h>
-#include <sys/socket.h> 
-#include <netinet/in.h> 
-#include <unistd.h> // read(), write(), close()
 #include <arpa/inet.h> // inet_addr()
+#include <netinet/in.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <thread>
+#include <unistd.h> // read(), write(), close()
 
 #include "ITcpConnection.h"
 #include "constants.h"
-#include "frame_header.h"
 #include "fd_util.h"
+#include "frame_header.h"
 
 bool TcpConnection::IsRunning()
 {
@@ -45,7 +45,6 @@ TcpConnection::TcpConnection()
     _state = ClientState::Uninitialized;
 }
 
-
 bool TcpConnection::Init(ConcurrencyType type)
 {
     if (_state != ClientState::OwnerSet)
@@ -71,7 +70,7 @@ bool TcpConnection::Init(ConcurrencyType type)
         }
     }
 
-    if(_concurencyType == ConcurrencyType::EventBased)
+    if (_concurencyType == ConcurrencyType::EventBased)
         return PrepareEventBased();
 
     std::thread t(&TcpConnection::RunThread, this);
@@ -79,7 +78,8 @@ bool TcpConnection::Init(ConcurrencyType type)
 
     {
         std::unique_lock<std::mutex> lock(_cv_mutex);
-        if(!_cv.wait_for(lock, std::chrono::seconds(THREAD_START_TIMEOUT_SECONDS), [this]{return _state  == ClientState::Running;}))
+        if (!_cv.wait_for(lock, std::chrono::seconds(THREAD_START_TIMEOUT_SECONDS),
+                          [this] { return _state == ClientState::Running; }))
             return false;
     }
 
@@ -93,87 +93,86 @@ bool TcpConnection::closeRequested()
 
 void TcpConnection::handleWrite()
 {
-    m_size_t frameSize = 0;
-    if(!_outgoing.canConsumeFrame(frameSize))
+    if (_outgoing.size() == 0)
+    {
+        _connWrite = false;
         return;
-    
-    if(frameSize == 0)
-        return;
+    }
 
-    const char* outgoing = _outgoing.peekFramePtr();
-    if(outgoing == nullptr)
-        return;
-    
-    m_size_t sendSize = 0;
-
+    const char* outgoing = _outgoing.data();
+    size_t totalToSend = _outgoing.size();
+    size_t sendSize = 0;
     bool errorInWrite = false;
 
-    while(frameSize > sendSize)
+    while (totalToSend > sendSize)
     {
-        ssize_t bytesWritten = write(_socketfd, outgoing + sendSize, frameSize - sendSize);
+        ssize_t bytesWritten = write(_socketfd, outgoing + sendSize, totalToSend - sendSize);
         if (bytesWritten < 0)
         {
-            if(errno != EAGAIN && errno != EWOULDBLOCK)
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
                 _connClose = true;
-            errorInWrite = true; 
+            errorInWrite = true;
             break;
         }
         else
             sendSize += bytesWritten;
     }
 
-    if(!errorInWrite)
-        _outgoing.consume(frameSize);
+    if (sendSize > 0)
+        _outgoing.consume(sendSize);
 
-    if(!_outgoing.canConsumeFrame())
+    if (_outgoing.size() == 0 && !errorInWrite)
         _connWrite = false;
 }
 
 void TcpConnection::handleRead()
 {
     ssize_t rv = read(_socketfd, _buffer, sizeof(_buffer));
-    if (rv <= 0) 
-    {  // handle IO error (rv < 0) or EOF (rv == 0)
+    if (rv <= 0)
+    {
         _connClose = true;
         return;
     }
-    // 2. Add new data to the `Conn::incoming` buffer.
-    _incoming.append(_buffer, (m_size_t)rv);
 
-    if(_incoming.canConsumeFrame())
+    _incoming.append(_buffer, (size_t)rv);
+
+    while (_incoming.size() > 0)
     {
-        m_size_t frameSize = _incoming.peekFrameSize();
-        if(frameSize == 0)
-            return;
+        size_t available = _incoming.size();
+        const char* data = _incoming.data();
 
-        const char* data = _incoming.peekFramePtr();
-        if(data == nullptr)
-            return;
-        
-        _owner->OnMessageReceive(data, frameSize);
+        size_t consumed = _owner->OnMessageReceive(data, available);
 
-        _incoming.consume(frameSize);
+        if (consumed > 0)
+        {
+            _incoming.consume((m_size_t)consumed);
+        }
+        else
+        {
+            // Not enough data for a full message, wait for more
+            break;
+        }
     }
 }
 
 bool TcpConnection::PrepareEventBased()
 {
-    if(_state != ClientState::OwnerSet)
+    if (_state != ClientState::OwnerSet)
         return false;
 
-    if(fd_util::fd_set_nonblock(_socketfd) == false) 
+    if (fd_util::fd_set_nonblock(_socketfd) == false)
         return false;
 
-    _connWrite  = false;
-    _connClose  = false;
-    
+    _connWrite = false;
+    _connClose = false;
+
     _state = ClientState::Running;
     return true;
 }
 
 void TcpConnection::SetOwner(ITcpConnection* owner)
 {
-    if(_state != ClientState::Initialized)
+    if (_state != ClientState::Initialized)
         return;
 
     _owner = owner;
@@ -202,7 +201,7 @@ void TcpConnection::Stop()
 {
     if (_state == ClientState::Running)
     {
-        if(_concurencyType == ConcurrencyType::EventBased)
+        if (_concurencyType == ConcurrencyType::EventBased)
         {
             close(_socketfd);
             _state = ClientState::Stopped;
@@ -217,8 +216,8 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
 {
     if (_state != ClientState::Running)
         return;
-    
-    if(_concurencyType == ConcurrencyType::EventBased)
+
+    if (_concurencyType == ConcurrencyType::EventBased)
     {
         _outgoing.append(buffer, length);
         _connWrite = true;
@@ -228,11 +227,11 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
     {
         ssize_t bytesSent = 0;
 
-        while(bytesSent < length)
+        while (bytesSent < length)
         {
             ssize_t bytesToWrite = length - bytesSent;
             ssize_t bytesWritten = write(_socketfd, buffer + bytesSent, bytesToWrite);
-            if(bytesWritten < 0)
+            if (bytesWritten < 0)
                 break;
             bytesSent += bytesWritten;
         }
@@ -241,6 +240,6 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
 
 TcpConnection::~TcpConnection()
 {
-    if(_state == ClientState::Running) // make sure the socket is closed
+    if (_state == ClientState::Running) // make sure the socket is closed
         Stop();
 }

@@ -2,17 +2,17 @@
 
 class TcpConnection;
 
-
 class Client : public ITcpConnection
 {
-    TcpConnection* _connection = nullptr;
+    TcpConnection *_connection = nullptr;
     Client();
+
 public:
-    void OnMessageReceive(const char* buffer, m_size_t length) override;
+    size_t OnMessageReceive(const char *buffer, m_size_t length) override;
     void OnDisconnect() override;
     ~Client() override;
 
-    static Client* Get();
+    static Client *Get();
 
     bool Init();
     bool IsRunning();
