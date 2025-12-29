@@ -65,5 +65,9 @@ redis-cli PING
 - [ ] Persistence (RDB/AOF).
 - [ ] Pub/Sub support.
 
+## 📚 Acknowledgments
+
+This project was developed with the help of the excellent guide [Build Your Own Redis](https://build-your-own.org/redis/) by James Smith. Many of the architectural decisions and data structure implementations (like the intrusive hash map and AVL tree) were inspired by his approach.
+
 ## 📜 License
 This project is for educational purposes as a deep dive into systems programming and networking.
