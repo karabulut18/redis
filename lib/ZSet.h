@@ -47,4 +47,14 @@ namespace ZSET
         explicit Entry(uint32_t type);
         ~Entry();
     };
+
+    struct HKey
+    {
+        HNode _hashN;
+        const char* _name = nullptr;
+        size_t _len = 0;
+
+        static bool cmp(HNode* a, HNode* key);
+    };
+
 } // namespace ZSET
