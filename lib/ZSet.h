@@ -6,12 +6,6 @@
 #include <new>
 #include <string>
 
-struct ZSet
-{
-    AVLTree _tree;
-    HashMap _map;
-};
-
 struct ZNode
 {
     AVLNode _treeN;
@@ -23,6 +17,17 @@ struct ZNode
 
     static ZNode* createNode(const char* name, size_t len, double score);
     static void destroyNode(ZNode* node);
+    static bool less(AVLNode* ln, AVLNode* rn);
+};
+
+struct ZSet
+{
+    AVLTree _tree;
+    HashMap _map;
+
+    ZNode* LookUp(const char* name, size_t len);
+    bool Insert(ZNode* node, double score);
+    void updateScore(ZNode* node, double score);
 };
 
 namespace ZSET
@@ -53,7 +58,6 @@ namespace ZSET
         HNode _hashN;
         const char* _name = nullptr;
         size_t _len = 0;
-
         static bool cmp(HNode* a, HNode* key);
     };
 

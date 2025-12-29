@@ -149,7 +149,7 @@ AVLNode* AVLNode::deleteNode(AVLNode* node)
     return root;
 }
 
-void AVLNode::searchAndInsert(AVLNode** root, AVLNode* newNode, bool (*less)(AVLNode*, AVLNode*))
+void AVLTree::searchAndInsert(AVLNode** root, AVLNode* newNode, bool (*less)(AVLNode*, AVLNode*))
 {
     AVLNode* parent = nullptr;
     AVLNode** from = root;
@@ -163,10 +163,10 @@ void AVLNode::searchAndInsert(AVLNode** root, AVLNode* newNode, bool (*less)(AVL
     *from = newNode;
     newNode->parent = parent;
 
-    *root = balance(*root);
+    *root = AVLNode::balance(*root);
 }
 
-AVLNode* AVLNode::searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key)
+AVLNode* AVLTree::searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key)
 {
     for (AVLNode* node = *root; node;)
     {
@@ -177,7 +177,7 @@ AVLNode* AVLNode::searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*
             node = node->right;
         else
         {
-            *root = deleteNode(node);
+            *root = AVLNode::deleteNode(node);
             return node;
         }
     }

@@ -20,12 +20,11 @@ struct AVLNode
     static AVLNode* findMin(AVLNode* node);
     static AVLNode* deleteNode(AVLNode* node);
     static AVLNode* deleteNodeEasy(AVLNode* node);
-
-    static void searchAndInsert(AVLNode** root, AVLNode* node, bool (*less)(AVLNode*, AVLNode*));
-    static AVLNode* searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key);
 };
 
 struct AVLTree
 {
     AVLNode* _root = nullptr;
+    static void searchAndInsert(AVLNode** root, AVLNode* node, bool (*less)(AVLNode*, AVLNode*));
+    static AVLNode* searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key);
 };
