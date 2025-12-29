@@ -8,7 +8,7 @@ struct AVLNode
     AVLNode* right;
     uint32_t height;
 
-    AVLNode();
+    static void initNode(AVLNode* node);
     static uint32_t getHeight(const AVLNode* node);
     static void updateHeight(AVLNode* node);
     static AVLNode* rotateLeft(AVLNode* node);
@@ -23,4 +23,9 @@ struct AVLNode
 
     static void searchAndInsert(AVLNode** root, AVLNode* node, bool (*less)(AVLNode*, AVLNode*));
     static AVLNode* searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key);
+};
+
+struct AVLTree
+{
+    AVLNode* _root = nullptr;
 };

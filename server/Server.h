@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../lib/ITcpServer.h"
-#include "DataBase.h"
 #include <map>
 
 #define PORT 8089
@@ -16,7 +15,6 @@ class Server : public ITcpServer
     Server();
     ~Server() override;
 
-    DataBase _dataBase;
     std::map<int, Client*> _clients;
 
 public:

@@ -3,10 +3,10 @@
 #include <cassert>
 #include <sys/_types/_int32_t.h>
 
-AVLNode::AVLNode()
+void AVLNode::initNode(AVLNode* node)
 {
-    parent = left = right = nullptr;
-    height = 1;
+    node->parent = node->left = node->right = nullptr;
+    node->height = 1;
 }
 
 uint32_t AVLNode::getHeight(const AVLNode* node)
