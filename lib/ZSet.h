@@ -18,6 +18,8 @@ struct ZNode
     static ZNode* createNode(const char* name, size_t len, double score);
     static void destroyNode(ZNode* node);
     static bool less(AVLNode* ln, AVLNode* rn);
+    static bool less(AVLNode* ln, double score, const char* name, size_t len);
+    static ZNode* offset(ZNode* node, int32_t offset);
 };
 
 struct ZSet
@@ -27,7 +29,14 @@ struct ZSet
 
     ZNode* LookUp(const char* name, size_t len);
     bool Insert(ZNode* node, double score);
+    void Update(ZNode* node, double score);
+    void Delete(ZNode* node);
+
+    ZNode* Seekge(double score, const char* name, size_t len);
+
+private:
     void updateScore(ZNode* node, double score);
+    void treeInsert(ZNode* node);
 };
 
 namespace ZSET

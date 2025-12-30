@@ -13,6 +13,7 @@ struct AVLNode
     static void updateHeight(AVLNode* node);
     static AVLNode* rotateLeft(AVLNode* node);
     static AVLNode* rotateRight(AVLNode* node);
+    static AVLNode* offset(AVLNode* node, int32_t offset);
 
     static AVLNode* leftFix(AVLNode* node);
     static AVLNode* rightFix(AVLNode* node);
