@@ -21,6 +21,11 @@ struct AVLNode
     static AVLNode* findMin(AVLNode* node);
     static AVLNode* deleteNode(AVLNode* node);
     static AVLNode* deleteNodeEasy(AVLNode* node);
+
+    static AVLNode* successor(AVLNode* node);
+    static AVLNode* predecessor(AVLNode* node);
+
+    static AVLNode* offset(AVLNode* node, int64_t offset);
 };
 
 struct AVLTree

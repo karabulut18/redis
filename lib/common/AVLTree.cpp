@@ -183,3 +183,58 @@ AVLNode* AVLTree::searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*
     }
     return nullptr;
 }
+
+AVLNode* AVLNode::successor(AVLNode* node)
+{
+    // left most node in the right sub three
+    if (node->right)
+    {
+        for (node = node->right; node->left; node = node->left)
+        {
+        };
+        return node;
+    }
+
+    // the parent where this node is right most node in the left sub three
+    while (AVLNode* parent = node->parent)
+    {
+        if (node == parent->left)
+            return parent;
+
+        node = parent;
+    }
+    return nullptr;
+}
+
+AVLNode* AVLNode::predecessor(AVLNode* node)
+{
+    // right most node in the left sub three
+    if (node->left)
+    {
+        for (node = node->left; node->right; node = node->right)
+        {
+        };
+        return node;
+    }
+
+    // the parent where this node is left most node in the right sub three
+    while (AVLNode* parent = node->parent)
+    {
+        if (node == parent->right)
+            return parent;
+
+        node = parent;
+    }
+    return nullptr;
+}
+
+AVLNode* AVLNode::offset(AVLNode* node, int64_t offset)
+{
+    for (; offset > 0; offset--)
+        node = successor(node);
+
+    for (; offset < 0; offset++)
+        node = predecessor(node);
+
+    return node;
+}

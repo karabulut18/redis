@@ -12,14 +12,14 @@ struct ZNode
     HNode _hashN;
 
     double _score = 0;
-    size_t len = 0;
-    char name[0]; // flexible array
+    size_t _len = 0;
+    char _name[0]; // flexible array
 
     static ZNode* createNode(const char* name, size_t len, double score);
     static void destroyNode(ZNode* node);
     static bool less(AVLNode* ln, AVLNode* rn);
     static bool less(AVLNode* ln, double score, const char* name, size_t len);
-    static ZNode* offset(ZNode* node, int32_t offset);
+    static ZNode* offset(ZNode* node, int64_t offset);
 };
 
 struct ZSet

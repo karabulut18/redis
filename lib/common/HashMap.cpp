@@ -1,4 +1,6 @@
 #include "HashMap.h"
+#include <cstdlib>
+#include <cassert>
 
 void HashTable::init(HashTable* hashTable, size_t size)
 {
