@@ -1,17 +1,21 @@
 #pragma once
 #include <algorithm>
 #include <climits>
+#include <functional>
 #include <vector>
 
-class SegmentTree
+template <typename T> class SegmentTree
 {
-    std::vector<int> _tree;
+    using Combiner = std::function<T(const T&, const T&)>;
+
+    std::vector<T> _tree;
     int _size;
+    T _identity;
+    Combiner _combiner;
 
 public:
-    SegmentTree(int size)
+    SegmentTree(int size, T identity, Combiner combiner) : _size(size), _identity(identity), _combiner(combiner)
     {
-        _size = size;
         // Optimization:
         // In the standard recursive implementation, we need 4*n space because the tree structure
         // follows 2*p and 2*p+1 indexing, which leaves gaps if n is not a power of 2.
@@ -21,10 +25,10 @@ public:
         // - Internal nodes are stored at [1, n-1]
         // - Root is at 1
         // This dense packing guarantees we only need 2*n space.
-        _tree.resize(2 * size, 0);
+        _tree.resize(2 * size, identity);
     }
 
-    void build(const std::vector<int>& arr)
+    void build(const std::vector<T>& arr)
     {
         // Initialize leaves
         for (int i = 0; i < _size; ++i)
@@ -32,20 +36,21 @@ public:
             if (i < (int)arr.size())
                 _tree[_size + i] = arr[i];
             else
-                _tree[_size + i] = 0; // Default handling if arr is smaller
+                _tree[_size + i] = _identity;
         }
 
         // Build the tree by calculating parents
         for (int i = _size - 1; i > 0; --i)
         {
-            _tree[i] = std::min(_tree[2 * i], _tree[2 * i + 1]);
+            _tree[i] = _combiner(_tree[2 * i], _tree[2 * i + 1]);
         }
     };
 
     // Query range [L, R] inclusive
-    int query(int L, int R)
+    T query(int L, int R)
     {
-        int res = INT_MAX;
+        T leftRes = _identity;
+        T rightRes = _identity;
 
         // Convert to open interval [l, r) for standard iterative logic
         // l starts at L + _size
@@ -53,16 +58,16 @@ public:
         for (int l = L + _size, r = R + 1 + _size; l < r; l /= 2, r /= 2)
         {
             if (l & 1)
-                res = std::min(res, _tree[l++]);
+                leftRes = _combiner(leftRes, _tree[l++]);
 
             if (r & 1)
-                res = std::min(res, _tree[--r]);
+                rightRes = _combiner(_tree[--r], rightRes);
         }
 
-        return res;
+        return _combiner(leftRes, rightRes);
     }
 
-    void update(int idx, int val)
+    void update(int idx, T val)
     {
         int pos = idx + _size;
         _tree[pos] = val;
@@ -70,7 +75,7 @@ public:
         // Move up to root
         for (pos /= 2; pos >= 1; pos /= 2)
         {
-            _tree[pos] = std::min(_tree[2 * pos], _tree[2 * pos + 1]);
+            _tree[pos] = _combiner(_tree[2 * pos], _tree[2 * pos + 1]);
         }
     };
 };
