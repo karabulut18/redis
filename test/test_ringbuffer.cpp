@@ -1,5 +1,5 @@
-#include "../lib/LockFreeByteRingBuffer.h"
-#include "../lib/LockFreeRingBuffer.h"
+#include "../lib/common/LockFreeByteRingBuffer.h"
+#include "../lib/common/LockFreeRingBuffer.h"
 #include <cassert>
 #include <iostream>
 #include <thread>
