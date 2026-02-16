@@ -4,6 +4,8 @@
 #include "../lib/redis/Database.h"
 #include "Command.h"
 #include <map>
+#include <mutex>
+#include <vector>
 
 class TcpServer;
 class TcpConnection;
@@ -12,11 +14,12 @@ struct RespValue;
 
 class Server : public ITcpServer
 {
-    TcpServer* _tcpServer = nullptr;
+    TcpServer* _tcpServer;
     Server();
     ~Server() override;
 
     std::map<int, Client*> _clients;
+    std::mutex _clientsMutex;
     Database _db;
 
 public:

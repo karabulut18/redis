@@ -160,6 +160,29 @@ Database::~Database()
     _map.clear();
 }
 
+void Database::clear()
+{
+    // Safely delete all entries from both tables
+    auto clearTable = [&](HashTable& ht)
+    {
+        for (size_t i = 0; !ht.empty() && i <= ht.mask(); ++i)
+        {
+            HNode* node = ht.bucketAt(i);
+            while (node)
+            {
+                HNode* next = node->next;
+                delete Entry::fromHash(node);
+                node = next;
+            }
+        }
+    };
+
+    clearTable(_map.newer());
+    clearTable(_map.older());
+    _map.clear();
+    _size = 0;
+}
+
 bool Database::set(const std::string& key, const std::string& value, int64_t ttlMs)
 {
     Entry* existing = findEntryRaw(key);
@@ -190,6 +213,55 @@ const std::string* Database::get(const std::string& key)
 {
     Entry* entry = findEntry(key, EntryType::STRING); // lazy expiration + type check
     return entry ? &entry->value : nullptr;
+}
+
+std::pair<int64_t, bool> Database::incrby(const std::string& key, int64_t increment)
+{
+    Entry* entry = findEntry(key, EntryType::STRING); // lazy expire check
+    int64_t value = 0;
+
+    if (entry)
+    {
+        // Type check handled by findEntry? No, findEntry(STRING) returns null if wrong type.
+        // But we need to distinguish between "not found" and "wrong type" to return error?
+        // Logic: if not found by findEntry(STRING), check findEntryRaw.
+        // If findEntryRaw exists, it is WRONGTYPE.
+
+        // Wait, simpler:
+        Entry* raw = findEntryRaw(key);
+        if (raw)
+        {
+            if (raw->type != EntryType::STRING)
+                return {0, false}; // WRONGTYPE (signaled by false)
+
+            // Check expiry
+            if (raw->isExpired())
+            {
+                removeEntry(raw);
+                raw = nullptr;
+            }
+        }
+
+        if (raw)
+        {
+            try
+            {
+                value = std::stoll(raw->value);
+            }
+            catch (...)
+            {
+                return {0, false}; // Not an integer
+            }
+            value += increment;
+            raw->value = std::to_string(value);
+            return {value, true};
+        }
+    }
+
+    // Key doesn't exist (or expired)
+    value = increment;
+    set(key, std::to_string(value));
+    return {value, true};
 }
 
 bool Database::zadd(const std::string& key, double score, const std::string& member)

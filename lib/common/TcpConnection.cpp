@@ -206,6 +206,8 @@ void TcpConnection::Stop()
             close(_socketfd);
             _state = ClientState::Stopped;
             _connClose = true;
+            if (_owner)
+                _owner->OnDisconnect();
         }
         else
             _state = ClientState::StopRequested;

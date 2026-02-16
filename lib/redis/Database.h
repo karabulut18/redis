@@ -100,6 +100,15 @@ public:
     // GET key — returns pointer to value if found (and not expired), nullptr otherwise.
     const std::string* get(const std::string& key);
 
+    // INCRBY key increment — increments the number stored at key by increment.
+    // Returns the new value. Throws/Returns error if value is not an integer.
+    // Uses int64_t for return value. Returns pair {new_value, success}.
+    // If failure (WRONGTYPE or overflow/parsing), we can use std::optional or a struct.
+    // Simpler: return int64_t, but how to signal error?
+    // Redis returns error if not a string or not an integer.
+    // Let's use a helper struct or std::pair<int64_t, bool> where bool is success.
+    std::pair<int64_t, bool> incrby(const std::string& key, int64_t increment);
+
     // --- ZSet Commands ---
 
     // ZADD key score member
@@ -209,6 +218,9 @@ public:
     {
         return _size;
     }
+
+    // Clears all data from the database
+    void clear();
 
 private:
     // Find entry (returns nullptr if not found, WRONGTYPE, or expired)

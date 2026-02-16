@@ -42,6 +42,7 @@ std::string Client::PrepareResponse(const RespValue& response)
 
 size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
 {
+    PUTF_LN("Client " + std::to_string(_id) + " received " + std::to_string(size) + " bytes");
     size_t totalConsumed = 0;
     while (totalConsumed < size)
     {
@@ -73,6 +74,7 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
             }
 
             EnqueueCommand(cmd);
+            PUTF_LN("Enqueued command: " + cmd.args[0]);
         }
         else if (val.type == RespType::SimpleString)
         {
@@ -82,7 +84,9 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
                 Command cmd;
                 cmd.client = this;
                 cmd.args.push_back("PING");
+                cmd.args.push_back("PING");
                 EnqueueCommand(cmd);
+                PUTF_LN("Enqueued inline PING");
             }
         }
 

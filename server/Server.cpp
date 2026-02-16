@@ -28,6 +28,14 @@ bool Server::Init()
 
 ITcpConnection* Server::AcceptConnection(int id, TcpConnection* connection)
 {
+    std::lock_guard<std::mutex> lock(_clientsMutex);
+    auto it = _clients.find(id);
+    if (it != _clients.end())
+    {
+        PUTF_LN("Cleaning up stale client on FD " + std::to_string(id));
+        delete it->second;
+        _clients.erase(it);
+    }
     Client* client = new Client(id, connection);
     _clients.insert({id, client});
     PUTF_LN("New client connected " + std::to_string(id));
@@ -80,16 +88,24 @@ void Server::Run()
 void Server::OnClientDisconnect(int id)
 {
     PUTF_LN("Client disconnected: " + std::to_string(id));
-    _clients.erase(id);
+    std::lock_guard<std::mutex> lock(_clientsMutex);
+    auto it = _clients.find(id);
+    if (it != _clients.end())
+    {
+        delete it->second;
+        _clients.erase(it);
+    }
 }
 
 void Server::ProcessCommands()
 {
+    std::lock_guard<std::mutex> lock(_clientsMutex);
     for (auto& [id, client] : _clients)
     {
         Command cmd;
         while (client->DequeueCommand(cmd))
         {
+            PUTF_LN("Dequeue command for client " + std::to_string(id));
             HandleCommand(client, cmd.args);
         }
     }
@@ -128,7 +144,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.value = args[1];
         else
             response.value = std::string_view("PONG");
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "SET")
     {
@@ -136,7 +152,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'set' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -163,7 +179,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         _db.set(key, value, ttlMs);
         response.type = RespType::SimpleString;
         response.value = std::string_view("OK");
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "GET")
     {
@@ -171,7 +187,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'get' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -181,12 +197,12 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::BulkString;
             response.value = std::string_view(val->data(), val->size());
-            client->SendResponse(response);
+            QueueResponse(client, response);
         }
         else
         {
             response.type = RespType::Null;
-            client->SendResponse(response);
+            QueueResponse(client, response);
         }
     }
     else if (cmd == "DEL")
@@ -195,7 +211,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'del' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         int64_t deleted = 0;
@@ -207,7 +223,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         }
         response.type = RespType::Integer;
         response.value = deleted;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "EXPIRE")
     {
@@ -215,7 +231,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'expire' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -223,7 +239,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         bool ok = _db.expire(key, seconds * 1000);
         response.type = RespType::Integer;
         response.value = ok ? int64_t(1) : int64_t(0);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "PEXPIRE")
     {
@@ -231,7 +247,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'pexpire' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -239,7 +255,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         bool ok = _db.expire(key, ms);
         response.type = RespType::Integer;
         response.value = ok ? int64_t(1) : int64_t(0);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "TTL")
     {
@@ -247,7 +263,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'ttl' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -258,7 +274,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.value = pttl / 1000;
         else
             response.value = pttl;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "PTTL")
     {
@@ -266,14 +282,14 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'pttl' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
         int64_t pttl = _db.pttl(key);
         response.type = RespType::Integer;
         response.value = pttl;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "PERSIST")
     {
@@ -281,14 +297,69 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'persist' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
         bool ok = _db.persist(key);
         response.type = RespType::Integer;
         response.value = ok ? int64_t(1) : int64_t(0);
-        client->SendResponse(response);
+        QueueResponse(client, response);
+    }
+    else if (cmd == "INCR")
+    {
+        if (args.size() != 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'incr' command");
+            QueueResponse(client, response);
+            return;
+        }
+        std::pair<int64_t, bool> res = _db.incrby(args[1], 1);
+        if (!res.second)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR value is not an integer or out of range, or wrong type");
+            QueueResponse(client, response);
+            return;
+        }
+        response.type = RespType::Integer;
+        response.value = res.first;
+        QueueResponse(client, response);
+    }
+    else if (cmd == "INCRBY")
+    {
+        if (args.size() != 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'incrby' command");
+            QueueResponse(client, response);
+            return;
+        }
+        int64_t incr = 0;
+        try
+        {
+            incr = std::stoll(args[2]);
+        }
+        catch (...)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR value is not an integer or out of range");
+            QueueResponse(client, response);
+            return;
+        }
+
+        std::pair<int64_t, bool> res = _db.incrby(args[1], incr);
+        if (!res.second)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR value is not an integer or out of range, or wrong type");
+            QueueResponse(client, response);
+            return;
+        }
+        response.type = RespType::Integer;
+        response.value = res.first;
+        QueueResponse(client, response);
     }
     else if (cmd == "EXISTS")
     {
@@ -296,7 +367,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'exists' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         int64_t count = 0;
@@ -308,7 +379,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         }
         response.type = RespType::Integer;
         response.value = count;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "KEYS")
     {
@@ -316,7 +387,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'keys' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string pattern = args[1];
@@ -333,13 +404,13 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             arr.push_back(elem);
         }
         response.value = std::move(arr);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "DBSIZE")
     {
         response.type = RespType::Integer;
         response.value = static_cast<int64_t>(_db.size());
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "RENAME")
     {
@@ -347,7 +418,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'rename' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -363,25 +434,41 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.type = RespType::Error;
             response.value = std::string_view("ERR no such key");
         }
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "ZADD")
     {
-        if (args.size() < 4)
+        if (args.size() < 4 || (args.size() - 2) % 2 != 0)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'zadd' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
-        double score = std::stod(args[2]);
-        std::string member = args[3];
+        int64_t addedCount = 0;
 
-        bool added = _db.zadd(key, score, member);
+        for (size_t i = 2; i + 1 < args.size(); i += 2)
+        {
+            try
+            {
+                double score = std::stod(args[i]);
+                std::string member = args[i + 1];
+                if (_db.zadd(key, score, member))
+                    addedCount++;
+            }
+            catch (...)
+            {
+                response.type = RespType::Error;
+                response.value = std::string_view("ERR value is not a valid float");
+                QueueResponse(client, response);
+                return;
+            }
+        }
+
         response.type = RespType::Integer;
-        response.value = added ? int64_t(1) : int64_t(0);
-        client->SendResponse(response);
+        response.value = addedCount;
+        QueueResponse(client, response);
     }
     else if (cmd == "ZREM")
     {
@@ -389,7 +476,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'zrem' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -402,7 +489,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         }
         response.type = RespType::Integer;
         response.value = removedCount;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "ZCARD")
     {
@@ -410,13 +497,13 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'zcard' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
         response.type = RespType::Integer;
         response.value = _db.zcard(key);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "ZSCORE")
     {
@@ -424,7 +511,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'zscore' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -439,12 +526,12 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             if (s.back() == '.')
                 s.pop_back();
             response.value = s;
-            client->SendResponse(response);
+            QueueResponse(client, response);
         }
         else
         {
             response.type = RespType::Null;
-            client->SendResponse(response);
+            QueueResponse(client, response);
         }
     }
     else if (cmd == "ZRANGE")
@@ -453,7 +540,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'zrange' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -493,7 +580,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             }
         }
         response.value = std::move(arr);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "ZRANGEBYSCORE")
     {
@@ -501,7 +588,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'zrangebyscore' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -529,7 +616,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             }
         }
         response.value = array;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "HSET")
     {
@@ -537,7 +624,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'hset' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -549,13 +636,13 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
         response.type = RespType::Integer;
         response.value = (int64_t)result;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "HGET")
     {
@@ -563,7 +650,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'hget' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -574,12 +661,12 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::BulkString;
             response.value = *val;
-            client->SendResponse(response);
+            QueueResponse(client, response);
         }
         else
         {
             response.type = RespType::Null;
-            client->SendResponse(response);
+            QueueResponse(client, response);
         }
     }
     else if (cmd == "HDEL")
@@ -588,7 +675,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'hdel' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -601,7 +688,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             {
                 response.type = RespType::Error;
                 response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-                client->SendResponse(response);
+                QueueResponse(client, response);
                 return;
             }
             if (res == 1)
@@ -610,7 +697,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
 
         response.type = RespType::Integer;
         response.value = (int64_t)count;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "HLEN")
     {
@@ -618,7 +705,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'hlen' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -627,12 +714,12 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         response.type = RespType::Integer;
         response.value = len;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "HGETALL")
     {
@@ -640,7 +727,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'hgetall' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -659,7 +746,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             array.push_back(val);
         }
         response.value = array;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "TYPE")
     {
@@ -667,7 +754,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'type' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -692,7 +779,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             else
                 response.value = std::string_view("unknown");
         }
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "LPUSH")
     {
@@ -700,7 +787,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'lpush' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -723,7 +810,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.type = RespType::Integer;
             response.value = len;
         }
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "RPUSH")
     {
@@ -731,7 +818,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'rpush' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -753,7 +840,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.type = RespType::Integer;
             response.value = len;
         }
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "LPOP")
     {
@@ -761,7 +848,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'lpop' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -771,7 +858,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
@@ -786,7 +873,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.type = RespType::BulkString;
             response.setStringOwned(*val);
         }
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "RPOP")
     {
@@ -794,7 +881,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'rpop' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -804,7 +891,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
@@ -819,7 +906,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             response.type = RespType::BulkString;
             response.setStringOwned(*val);
         }
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "LLEN")
     {
@@ -827,7 +914,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'llen' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -837,14 +924,14 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
         int64_t len = _db.llen(key);
         response.type = RespType::Integer;
         response.value = len;
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "LRANGE")
     {
@@ -852,7 +939,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'lrange' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -868,7 +955,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR value is not an integer or out of range");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
@@ -877,7 +964,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
@@ -894,7 +981,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             arr.push_back(v);
         }
         response.value = std::move(arr);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "SADD")
     {
@@ -902,7 +989,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'sadd' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -915,7 +1002,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             {
                 response.type = RespType::Error;
                 response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-                client->SendResponse(response);
+                QueueResponse(client, response);
                 return;
             }
             added += res;
@@ -923,7 +1010,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
 
         response.type = RespType::Integer;
         response.value = static_cast<int64_t>(added);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "SREM")
     {
@@ -931,7 +1018,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'srem' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -942,7 +1029,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
@@ -953,7 +1040,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
 
         response.type = RespType::Integer;
         response.value = static_cast<int64_t>(removed);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "SISMEMBER")
     {
@@ -961,7 +1048,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'sismember' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -971,14 +1058,14 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
         int res = _db.sismember(key, member);
         response.type = RespType::Integer;
         response.value = static_cast<int64_t>(res);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "SMEMBERS")
     {
@@ -986,7 +1073,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'smembers' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -995,7 +1082,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
@@ -1012,7 +1099,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
             arr.push_back(v);
         }
         response.value = std::move(arr);
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
     else if (cmd == "SCARD")
     {
@@ -1020,7 +1107,7 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("ERR wrong number of arguments for 'scard' command");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
         std::string key = args[1];
@@ -1029,20 +1116,34 @@ void Server::HandleCommand(Client* client, const std::vector<std::string>& args)
         {
             response.type = RespType::Error;
             response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-            client->SendResponse(response);
+            QueueResponse(client, response);
             return;
         }
 
         int64_t card = _db.scard(key);
         response.type = RespType::Integer;
         response.value = card;
-        client->SendResponse(response);
+        QueueResponse(client, response);
+    }
+    else if (cmd == "CLIENT")
+    {
+        // Ignore CLIENT commands for compatibility
+        response.type = RespType::SimpleString;
+        response.value = std::string_view("OK");
+        QueueResponse(client, response);
+    }
+    else if (cmd == "FLUSHALL")
+    {
+        _db.clear();
+        response.type = RespType::SimpleString;
+        response.value = std::string_view("OK");
+        QueueResponse(client, response);
     }
     else
     {
         response.type = RespType::Error;
         response.value = std::string_view("ERR unknown command");
-        client->SendResponse(response);
+        QueueResponse(client, response);
     }
 }
 

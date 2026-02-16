@@ -77,9 +77,17 @@ public:
     void clear();
 
     // Access to both tables for iteration macros
+    HashTable& newer()
+    {
+        return _newer;
+    }
     const HashTable& newer() const
     {
         return _newer;
+    }
+    HashTable& older()
+    {
+        return _older;
     }
     const HashTable& older() const
     {

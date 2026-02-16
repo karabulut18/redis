@@ -5,3 +5,7 @@ log/
 .vscode/
 *.o
 *.a
+*.log
+debug_*.py
+.venv/
+__pycache__/

@@ -3,7 +3,7 @@
 #include <string>
 
 #define PUTF(message) Output::GetInstance()->Write_F(message)
-#define PUTF_LN(message) Output::GetInstance()->WriteLine_F(message)
+#define PUTF_LN(message) Output::GetInstance()->WriteLine_FC(message)
 #define PUTFC_LN(message) Output::GetInstance()->WriteLine_FC(message)
 
 class Output
