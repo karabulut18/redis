@@ -153,3 +153,74 @@ int64_t Database::pttl(const std::string& key)
     int64_t remaining = entry->expiresAt - currentTimeMs();
     return remaining > 0 ? remaining : 0;
 }
+
+bool Database::exists(const std::string& key)
+{
+    return findEntry(key) != nullptr;
+}
+
+// Simple glob matching: supports "*", "prefix*", "*suffix", "pre*suf"
+static bool matchPattern(const std::string& pattern, const std::string& str)
+{
+    if (pattern == "*")
+        return true;
+
+    size_t star = pattern.find('*');
+    if (star == std::string::npos)
+        return pattern == str; // exact match
+
+    std::string prefix = pattern.substr(0, star);
+    std::string suffix = pattern.substr(star + 1);
+
+    if (str.size() < prefix.size() + suffix.size())
+        return false;
+    if (str.compare(0, prefix.size(), prefix) != 0)
+        return false;
+    if (!suffix.empty() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) != 0)
+        return false;
+    return true;
+}
+
+std::vector<std::string> Database::keys(const std::string& pattern)
+{
+    std::vector<std::string> result;
+
+    HT_FOREACH(_map.newer(), node)
+    {
+        Entry* entry = Entry::fromHash(node);
+        if (!entry->isExpired() && matchPattern(pattern, entry->key))
+            result.push_back(entry->key);
+    }
+    HT_FOREACH(_map.older(), node)
+    {
+        Entry* entry = Entry::fromHash(node);
+        if (!entry->isExpired() && matchPattern(pattern, entry->key))
+            result.push_back(entry->key);
+    }
+
+    return result;
+}
+
+bool Database::rename(const std::string& key, const std::string& newkey)
+{
+    Entry* entry = findEntry(key);
+    if (!entry)
+        return false;
+
+    // If newkey already exists, delete it first
+    del(newkey);
+
+    // Remove old key from map, update key+hash, reinsert
+    LookupKey lk(key);
+    HNode* removed = _map.remove(&lk.hashNode, LookupKey::cmp);
+    if (!removed)
+        return false;
+
+    Entry* e = Entry::fromHash(removed);
+    e->key = newkey;
+    e->hashNode.code = str_hash(newkey);
+    e->hashNode.next = nullptr;
+    _map.insert(&e->hashNode);
+    // _size stays the same (or decremented by del(newkey) above)
+    return true;
+}

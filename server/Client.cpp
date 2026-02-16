@@ -221,6 +221,98 @@ void Client::HandleCommand(const std::vector<RespValue>& args)
         response.value = ok ? int64_t(1) : int64_t(0);
         SendResponse(response);
     }
+    else if (cmd == "EXISTS")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'exists' command");
+            SendResponse(response);
+            return;
+        }
+        int64_t count = 0;
+        for (size_t i = 1; i < args.size(); i++)
+        {
+            std::string key(args[i].getString());
+            if (getDatabase().exists(key))
+                count++;
+        }
+        response.type = RespType::Integer;
+        response.value = count;
+        SendResponse(response);
+    }
+    else if (cmd == "KEYS")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'keys' command");
+            SendResponse(response);
+            return;
+        }
+        std::string pattern(args[1].getString());
+        auto matched = getDatabase().keys(pattern);
+
+        response.type = RespType::Array;
+        std::vector<RespValue> arr;
+        arr.reserve(matched.size());
+        for (auto& k : matched)
+        {
+            RespValue elem;
+            elem.type = RespType::BulkString;
+            elem.value = std::string_view(k.data(), k.size());
+            arr.push_back(elem);
+        }
+        response.value = std::move(arr);
+        SendResponse(response);
+    }
+    else if (cmd == "DBSIZE")
+    {
+        response.type = RespType::Integer;
+        response.value = static_cast<int64_t>(getDatabase().size());
+        SendResponse(response);
+    }
+    else if (cmd == "RENAME")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'rename' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        std::string newkey(args[2].getString());
+        bool ok = getDatabase().rename(key, newkey);
+        if (ok)
+        {
+            response.type = RespType::SimpleString;
+            response.value = std::string_view("OK");
+        }
+        else
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR no such key");
+        }
+        SendResponse(response);
+    }
+    else if (cmd == "TYPE")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'type' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        response.type = RespType::SimpleString;
+        if (getDatabase().exists(key))
+            response.value = std::string_view("string");
+        else
+            response.value = std::string_view("none");
+        SendResponse(response);
+    }
     else
     {
         response.type = RespType::Error;

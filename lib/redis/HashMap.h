@@ -35,8 +35,12 @@ public:
     }
     void clear();
 
-    // Access to internals for rehashing
+    // Access to internals for rehashing and iteration
     HNode*& bucketAt(size_t index)
+    {
+        return _table[index];
+    }
+    HNode* const& bucketAt(size_t index) const
     {
         return _table[index];
     }
@@ -51,6 +55,17 @@ private:
     size_t _size = 0;
 };
 
+// Iterate every HNode in a HashTable.
+// `ht` must be a HashTable (or reference), `var` is the HNode* loop variable.
+// Usage:
+//     HT_FOREACH(table, node) {
+//         Entry* e = Entry::fromHash(node);
+//         ...
+//     }
+#define HT_FOREACH(ht, var)                                                                                            \
+    for (size_t _hi_##var = 0; !(ht).empty() && _hi_##var <= (ht).mask(); _hi_##var++)                                 \
+        for (HNode* var = (ht).bucketAt(_hi_##var); var; var = var->next)
+
 class HashMap
 {
 public:
@@ -60,6 +75,16 @@ public:
     void insert(HNode* node);
     HNode* remove(HNode* key, const HNodeEq& eq);
     void clear();
+
+    // Access to both tables for iteration macros
+    const HashTable& newer() const
+    {
+        return _newer;
+    }
+    const HashTable& older() const
+    {
+        return _older;
+    }
 
 private:
     void triggerRehashing();

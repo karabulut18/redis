@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // Represents a single key-value entry in the database.
 // Uses intrusive HNode for HashMap storage.
@@ -71,6 +72,15 @@ public:
     // TTL key — returns remaining time in milliseconds.
     // Returns -1 if no expiry, -2 if key doesn't exist.
     int64_t pttl(const std::string& key);
+
+    // EXISTS key — returns true if key exists and is not expired.
+    bool exists(const std::string& key);
+
+    // KEYS pattern — returns all keys matching pattern (* = all).
+    std::vector<std::string> keys(const std::string& pattern);
+
+    // RENAME key newkey — renames key. Returns false if key doesn't exist.
+    bool rename(const std::string& key, const std::string& newkey);
 
     size_t size() const
     {
