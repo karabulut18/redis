@@ -1,7 +1,6 @@
 #include "str_hash.h"
 
-// this will be handled later
-// FNV hash
+// FNV-1a hash
 uint64_t str_hash(const uint8_t* str, size_t len)
 {
     uint64_t hash = 0xcbf29ce484222325; // FNV_offset_basis

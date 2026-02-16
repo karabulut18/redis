@@ -1,4 +1,4 @@
-#include "../lib/ITcpConnection.h"
+#include "../lib/common/ITcpConnection.h"
 
 class TcpConnection;
 class RespParser;

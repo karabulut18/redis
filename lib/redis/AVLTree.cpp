@@ -1,12 +1,11 @@
 #include "AVLTree.h"
-#include <_types/_uint64_t.h>
+#include <algorithm>
 #include <cassert>
-#include <sys/_types/_int32_t.h>
 
-void AVLNode::initNode(AVLNode* node)
+void AVLNode::init()
 {
-    node->parent = node->left = node->right = nullptr;
-    node->height = 1;
+    parent = left = right = nullptr;
+    height = 1;
 }
 
 uint32_t AVLNode::getHeight(const AVLNode* node)
@@ -16,47 +15,45 @@ uint32_t AVLNode::getHeight(const AVLNode* node)
 
 void AVLNode::updateHeight(AVLNode* node)
 {
-    uint32_t leftHeight = getHeight(node->left);
-    uint32_t rightHeight = getHeight(node->right);
-    node->height = 1 + (leftHeight > rightHeight ? leftHeight : rightHeight);
+    node->height = 1 + std::max(getHeight(node->left), getHeight(node->right));
 }
 
 AVLNode* AVLNode::rotateLeft(AVLNode* node)
 {
-    AVLNode* parent = node->parent;
-    AVLNode* newNode = node->right;
-    AVLNode* inner = newNode->left;
+    AVLNode* par = node->parent;
+    AVLNode* newRoot = node->right;
+    AVLNode* inner = newRoot->left;
 
     node->right = inner;
     if (inner)
         inner->parent = node;
 
-    newNode->parent = parent;
+    newRoot->parent = par;
+    newRoot->left = node;
+    node->parent = newRoot;
 
-    newNode->left = node;
-    node->parent = newNode;
     updateHeight(node);
-    updateHeight(newNode);
-    return newNode;
+    updateHeight(newRoot);
+    return newRoot;
 }
 
 AVLNode* AVLNode::rotateRight(AVLNode* node)
 {
-    AVLNode* parent = node->parent;
-    AVLNode* newNode = node->left;
-    AVLNode* inner = newNode->right;
+    AVLNode* par = node->parent;
+    AVLNode* newRoot = node->left;
+    AVLNode* inner = newRoot->right;
 
     node->left = inner;
     if (inner)
         inner->parent = node;
 
-    newNode->parent = parent;
+    newRoot->parent = par;
+    newRoot->right = node;
+    node->parent = newRoot;
 
-    newNode->right = node;
-    node->parent = newNode;
     updateHeight(node);
-    updateHeight(newNode);
-    return newNode;
+    updateHeight(newRoot);
+    return newRoot;
 }
 
 AVLNode* AVLNode::leftFix(AVLNode* node)
@@ -73,102 +70,147 @@ AVLNode* AVLNode::rightFix(AVLNode* node)
     return rotateLeft(node);
 }
 
-// Called on an updated node:
-// - Propagate auxiliary data.
-// - Fix imbalances.
-// - Return the new root node.
 AVLNode* AVLNode::balance(AVLNode* node)
 {
     while (true)
     {
         AVLNode** from = &node;
-        AVLNode* parent = node->parent;
-        if (parent)
-            from = parent->left == node ? &parent->left : &parent->right;
+        AVLNode* par = node->parent;
+        if (par)
+            from = (par->left == node) ? &par->left : &par->right;
 
         updateHeight(node);
 
-        uint32_t leftHeight = getHeight(node->left);
-        uint32_t rightHeight = getHeight(node->right);
-        if (leftHeight > rightHeight + 1)
-            node = leftFix(node);
-        else if (rightHeight > leftHeight + 1)
-            node = rightFix(node);
-        else
-            break;
+        uint32_t lh = getHeight(node->left);
+        uint32_t rh = getHeight(node->right);
+        if (lh > rh + 1)
+            *from = node = leftFix(node);
+        else if (rh > lh + 1)
+            *from = node = rightFix(node);
 
-        if (!parent)
-            return *from;
+        if (!par)
+            return node;
 
-        node = parent;
+        node = par;
     }
-    return node;
-};
-
-// detach a node where 1 of its children is empty
-AVLNode* AVLNode::deleteNodeEasy(AVLNode* node)
-{
-    assert(!node->left || !node->right);                    // at most 1 child
-    AVLNode* child = node->left ? node->left : node->right; // can be NULL
-    AVLNode* parent = node->parent;
-    // update the child's parent pointer
-    if (child)
-        child->parent = parent; // can be NULL
-    // attach the child to the grandparent
-    if (!parent)
-        return child; // removing the root node
-    AVLNode** from = parent->left == node ? &parent->left : &parent->right;
-    *from = child;
-    return balance(parent);
 }
 
-// detach a node and returns the new root of the tree
+AVLNode* AVLNode::deleteNodeEasy(AVLNode* node)
+{
+    assert(!node->left || !node->right);
+    AVLNode* child = node->left ? node->left : node->right;
+    AVLNode* par = node->parent;
+
+    if (child)
+        child->parent = par;
+
+    if (!par)
+        return child; // removing root
+
+    AVLNode** from = (par->left == node) ? &par->left : &par->right;
+    *from = child;
+    return balance(par);
+}
+
 AVLNode* AVLNode::deleteNode(AVLNode* node)
 {
-    // the easy case of 0 or 1 child
     if (!node->left || !node->right)
         return deleteNodeEasy(node);
-    // find the successor
+
+    // Find in-order successor
     AVLNode* victim = node->right;
     while (victim->left)
         victim = victim->left;
-    // detach the successor
+
     AVLNode* root = deleteNodeEasy(victim);
-    // swap with the successor
-    *victim = *node; // left, right, parent
+
+    // Swap victim into node's position
+    *victim = *node;
     if (victim->left)
         victim->left->parent = victim;
     if (victim->right)
         victim->right->parent = victim;
-    // attach the successor to the parent, or update the root pointer
+
     AVLNode** from = &root;
-    AVLNode* parent = node->parent;
-    if (parent)
-        from = parent->left == node ? &parent->left : &parent->right;
+    AVLNode* par = node->parent;
+    if (par)
+        from = (par->left == node) ? &par->left : &par->right;
     *from = victim;
+
     return root;
 }
 
-void AVLTree::searchAndInsert(AVLNode** root, AVLNode* newNode, bool (*less)(AVLNode*, AVLNode*))
+AVLNode* AVLNode::successor(AVLNode* node)
 {
-    AVLNode* parent = nullptr;
-    AVLNode** from = root;
-
-    for (AVLNode* node = *root; node;)
+    if (node->right)
     {
-        from = less(newNode, node) ? &node->left : &node->right;
-        parent = node;
-        node = *from;
+        for (node = node->right; node->left; node = node->left)
+        {
+        }
+        return node;
     }
-    *from = newNode;
-    newNode->parent = parent;
 
-    *root = AVLNode::balance(*root);
+    while (AVLNode* par = node->parent)
+    {
+        if (node == par->left)
+            return par;
+        node = par;
+    }
+    return nullptr;
 }
 
-AVLNode* AVLTree::searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key)
+AVLNode* AVLNode::predecessor(AVLNode* node)
 {
-    for (AVLNode* node = *root; node;)
+    if (node->left)
+    {
+        for (node = node->left; node->right; node = node->right)
+        {
+        }
+        return node;
+    }
+
+    while (AVLNode* par = node->parent)
+    {
+        if (node == par->right)
+            return par;
+        node = par;
+    }
+    return nullptr;
+}
+
+AVLNode* AVLNode::offset(AVLNode* node, int64_t off)
+{
+    for (; off > 0 && node; off--)
+        node = successor(node);
+
+    for (; off < 0 && node; off++)
+        node = predecessor(node);
+
+    return node;
+}
+
+// --- AVLTree ---
+
+void AVLTree::insert(AVLNode* node, const AVLLess& less)
+{
+    AVLNode* parent = nullptr;
+    AVLNode** from = &_root;
+
+    for (AVLNode* cur = _root; cur;)
+    {
+        from = less(node, cur) ? &cur->left : &cur->right;
+        parent = cur;
+        cur = *from;
+    }
+    *from = node;
+    node->parent = parent;
+
+    _root = AVLNode::balance(_root);
+}
+
+AVLNode* AVLTree::remove(const AVLCmp& cmp, void* key)
+{
+    for (AVLNode* node = _root; node;)
     {
         int32_t r = cmp(node, key);
         if (r < 0)
@@ -177,64 +219,9 @@ AVLNode* AVLTree::searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*
             node = node->right;
         else
         {
-            *root = AVLNode::deleteNode(node);
+            _root = AVLNode::deleteNode(node);
             return node;
         }
     }
     return nullptr;
-}
-
-AVLNode* AVLNode::successor(AVLNode* node)
-{
-    // left most node in the right sub three
-    if (node->right)
-    {
-        for (node = node->right; node->left; node = node->left)
-        {
-        };
-        return node;
-    }
-
-    // the parent where this node is right most node in the left sub three
-    while (AVLNode* parent = node->parent)
-    {
-        if (node == parent->left)
-            return parent;
-
-        node = parent;
-    }
-    return nullptr;
-}
-
-AVLNode* AVLNode::predecessor(AVLNode* node)
-{
-    // right most node in the left sub three
-    if (node->left)
-    {
-        for (node = node->left; node->right; node = node->right)
-        {
-        };
-        return node;
-    }
-
-    // the parent where this node is left most node in the right sub three
-    while (AVLNode* parent = node->parent)
-    {
-        if (node == parent->right)
-            return parent;
-
-        node = parent;
-    }
-    return nullptr;
-}
-
-AVLNode* AVLNode::offset(AVLNode* node, int64_t offset)
-{
-    for (; offset > 0; offset--)
-        node = successor(node);
-
-    for (; offset < 0; offset++)
-        node = predecessor(node);
-
-    return node;
 }

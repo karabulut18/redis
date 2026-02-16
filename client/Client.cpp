@@ -1,7 +1,7 @@
 #include "Client.h"
-#include "../lib/Output.h"
-#include "../lib/RespParser.h"
-#include "../lib/TcpConnection.h"
+#include "../lib/common/Output.h"
+#include "../lib/common/TcpConnection.h"
+#include "../lib/redis/RespParser.h"
 #include <string>
 #include <unistd.h>
 

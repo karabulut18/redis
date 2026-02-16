@@ -1,33 +1,30 @@
 #include "HashMap.h"
-#include <cstdlib>
-#include <cassert>
 
-void HashTable::init(HashTable* hashTable, size_t size)
+void HashTable::init(size_t size)
 {
-    assert(size > 0 && ((size - 1) & size) == 0); // n must be power of two
-    hashTable->table = (HNode**)calloc(size, sizeof(HNode*));
-    hashTable->mask = size - 1;
-    hashTable->size = 0;
+    assert(size > 0 && ((size - 1) & size) == 0); // must be power of two
+    _table.assign(size, nullptr);
+    _mask = size - 1;
+    _size = 0;
 }
 
-void HashTable::insert(HashTable* hashTable, HNode* node)
+void HashTable::insert(HNode* node)
 {
-    size_t index = node->code & hashTable->mask;
-    HNode* next = hashTable->table[index];
-    node->next = next;
-    hashTable->table[index] = node;
-    hashTable->size++;
+    size_t index = node->code & _mask;
+    node->next = _table[index];
+    _table[index] = node;
+    _size++;
 }
 
-HNode** HashTable::lookup(HashTable* tab, HNode* key, bool (*eq)(HNode*, HNode*))
+HNode** HashTable::lookup(HNode* key, const HNodeEq& eq)
 {
-    if (tab->table == nullptr)
+    if (_table.empty())
         return nullptr;
 
-    size_t index = key->code & tab->mask;
+    size_t index = key->code & _mask;
 
-    HNode** from = &tab->table[index];
-    for (HNode *curr, **prev = from; (curr = *prev) != nullptr; prev = &curr->next)
+    HNode** from = &_table[index];
+    for (HNode* curr; (curr = *from) != nullptr; from = &curr->next)
     {
         if (curr->code == key->code && eq(curr, key))
             return from;
@@ -36,89 +33,93 @@ HNode** HashTable::lookup(HashTable* tab, HNode* key, bool (*eq)(HNode*, HNode*)
     return nullptr;
 }
 
-HNode* HashTable::detach(HashTable* tab, HNode** from)
+HNode* HashTable::detach(HNode** from)
 {
     HNode* node = *from;
     *from = node->next;
-    tab->size--;
+    _size--;
     return node;
 }
 
-HNode* HashMap::lookup(HashMap* hmap, HNode* key, bool (*eq)(HNode*, HNode*))
+void HashTable::clear()
 {
-    HashMap::help_rehashing(hmap); // migrate some keys
-    HNode** from = HashTable::lookup(&hmap->older, key, eq);
+    _table.clear();
+    _mask = 0;
+    _size = 0;
+}
 
-    if (from != nullptr)
-        HashTable::lookup(&hmap->newer, key, eq);
+// --- HashMap ---
+
+HNode* HashMap::lookup(HNode* key, const HNodeEq& eq)
+{
+    helpRehashing();
+    HNode** from = _older.lookup(key, eq);
+
+    if (!from)
+        from = _newer.lookup(key, eq);
 
     return from ? *from : nullptr;
-};
+}
 
-void HashMap::trigger_rehashing(HashMap* hmap)
+void HashMap::triggerRehashing()
 {
-    assert(hmap->older.table != nullptr);
-    hmap->older = hmap->newer; // (newer, older) <- (new_table, newer)
-    HashTable::init(&hmap->newer, (hmap->newer.mask + 1) * 2);
-    hmap->migrate_position = 0;
-};
+    assert(!_newer.empty());
+    _older = std::move(_newer);
+    _newer = HashTable();
+    _newer.init((_older.mask() + 1) * 2);
+    _migratePosition = 0;
+}
 
-HNode* HashMap::remove(HashMap* hmap, HNode* key, bool (*eq)(HNode*, HNode*))
+HNode* HashMap::remove(HNode* key, const HNodeEq& eq)
 {
-    HashMap::help_rehashing(hmap); // migrate some keys
-    if (HNode** from = HashTable::lookup(&hmap->newer, key, eq))
-        return HashTable::detach(&hmap->newer, from);
+    helpRehashing();
+    if (HNode** from = _newer.lookup(key, eq))
+        return _newer.detach(from);
 
-    if (HNode** from = HashTable::lookup(&hmap->older, key, eq))
-        return HashTable::detach(&hmap->older, from);
+    if (HNode** from = _older.lookup(key, eq))
+        return _older.detach(from);
+
     return nullptr;
-};
+}
 
-void HashMap::insert(HashMap* hmap, HNode* node)
+void HashMap::insert(HNode* node)
 {
-    if (!hmap->newer.table)
-        HashTable::init(&hmap->newer, 4); // initialized it if empty
+    if (_newer.empty())
+        _newer.init(4);
 
-    HashTable::insert(&hmap->newer, node); // always insert to the newer table
+    _newer.insert(node);
 
-    if (!hmap->older.table) // check whether we need to rehash
+    if (_older.empty())
     {
-        size_t shreshold = (hmap->newer.mask + 1) * hmap->k_max_load_factor;
-        if (hmap->newer.size >= shreshold)
-            HashMap::trigger_rehashing(hmap);
+        size_t threshold = (_newer.mask() + 1) * MAX_LOAD_FACTOR;
+        if (_newer.size() >= threshold)
+            triggerRehashing();
     }
-    HashMap::help_rehashing(hmap); // migrate some keys
-};
+    helpRehashing();
+}
 
-void HashMap::help_rehashing(HashMap* hmap)
+void HashMap::helpRehashing()
 {
     size_t nwork = 0;
-    while (nwork < hmap->k_rehashing_work && hmap->older.size > 0)
+    while (nwork < REHASHING_WORK && _older.size() > 0)
     {
-        HNode** from = &hmap->older.table[hmap->migrate_position];
-        if (!*from)
+        HNode*& slot = _older.bucketAt(_migratePosition);
+        if (!slot)
         {
-            hmap->migrate_position++;
-            continue; // empty slot
+            _migratePosition++;
+            continue;
         }
-        // move the first list item to the newer table
-        HashTable::insert(&hmap->newer, HashTable::detach(&hmap->older, from));
+        _newer.insert(_older.detach(&slot));
         nwork++;
     }
-    // discard the old table if done
-    if (hmap->older.size == 0 && hmap->older.table)
+    if (_older.size() == 0 && !_older.empty())
     {
-        free(hmap->older.table);
-        hmap->older = HashTable{};
+        _older.clear();
     }
 }
 
-void HashMap::clear(HashMap* hmap)
+void HashMap::clear()
 {
-    if (hmap->older.table)
-        free(hmap->older.table);
-    if (hmap->newer.table)
-        free(hmap->newer.table);
-    hmap->older = HashTable{};
-    hmap->newer = HashTable{};
+    _older.clear();
+    _newer.clear();
 }

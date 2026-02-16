@@ -1,9 +1,11 @@
 #pragma once
 
-#include "../lib/ITcpConnection.h"
+#include "../lib/common/ITcpConnection.h"
+#include <vector>
 
 class TcpConnection;
 class RespParser;
+struct RespValue;
 
 class Client : public ITcpConnection
 {
@@ -19,6 +21,9 @@ public:
     void Ping();
 
 private:
+    void SendResponse(const RespValue& response);
+    void HandleCommand(const std::vector<RespValue>& args);
+
     TcpConnection* _connection = nullptr;
     RespParser* _parser = nullptr;
 };

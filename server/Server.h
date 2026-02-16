@@ -1,9 +1,7 @@
 #pragma once
 
-#include "../lib/ITcpServer.h"
+#include "../lib/common/ITcpServer.h"
 #include <map>
-
-#define PORT 8089
 
 class TcpServer;
 class TcpConnection;

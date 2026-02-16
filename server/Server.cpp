@@ -1,8 +1,8 @@
 #include <signal.h>
 
-#include "../lib/Output.h"
-#include "../lib/TcpConnection.h"
-#include "../lib/TcpServer.h"
+#include "../lib/common/Output.h"
+#include "../lib/common/TcpConnection.h"
+#include "../lib/common/TcpServer.h"
 #include "Client.h"
 #include "Server.h"
 #include <unistd.h>

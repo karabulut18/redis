@@ -1,36 +1,57 @@
 #pragma once
-#include <stdint.h>
+
+#include <cstdint>
+#include <functional>
 
 struct AVLNode
 {
-    AVLNode* parent;
-    AVLNode* left;
-    AVLNode* right;
-    uint32_t height;
+    AVLNode* parent = nullptr;
+    AVLNode* left = nullptr;
+    AVLNode* right = nullptr;
+    uint32_t height = 0;
 
-    static void initNode(AVLNode* node);
+    void init();
+
     static uint32_t getHeight(const AVLNode* node);
     static void updateHeight(AVLNode* node);
+
     static AVLNode* rotateLeft(AVLNode* node);
     static AVLNode* rotateRight(AVLNode* node);
-    static AVLNode* offset(AVLNode* node, int32_t offset);
 
     static AVLNode* leftFix(AVLNode* node);
     static AVLNode* rightFix(AVLNode* node);
     static AVLNode* balance(AVLNode* node);
+
     static AVLNode* findMin(AVLNode* node);
     static AVLNode* deleteNode(AVLNode* node);
     static AVLNode* deleteNodeEasy(AVLNode* node);
 
     static AVLNode* successor(AVLNode* node);
     static AVLNode* predecessor(AVLNode* node);
-
     static AVLNode* offset(AVLNode* node, int64_t offset);
 };
 
-struct AVLTree
+// Comparator types
+using AVLLess = std::function<bool(AVLNode*, AVLNode*)>;
+using AVLCmp = std::function<int32_t(AVLNode*, void*)>;
+
+class AVLTree
 {
+public:
+    AVLTree() = default;
+
+    void insert(AVLNode* node, const AVLLess& less);
+    AVLNode* remove(const AVLCmp& cmp, void* key);
+
+    AVLNode* root() const
+    {
+        return _root;
+    }
+    void setRoot(AVLNode* node)
+    {
+        _root = node;
+    }
+
+private:
     AVLNode* _root = nullptr;
-    static void searchAndInsert(AVLNode** root, AVLNode* node, bool (*less)(AVLNode*, AVLNode*));
-    static AVLNode* searchAndDelete(AVLNode** root, int32_t (*cmp)(AVLNode*, void*), void* key);
 };

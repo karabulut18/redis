@@ -1,162 +1,142 @@
 #include "ZSet.h"
-#include "AVLTree.h"
-#include "HashMap.h"
-#include "container_of.h"
 #include "str_hash.h"
+#include <cassert>
+#include <cstddef>
 
-ZNode* ZNode::createNode(const char* name, size_t len, double score)
+// --- ZNode ---
+
+ZNode::ZNode(const std::string& n, double s) : score(s), name(n)
 {
-    ZNode* node = (ZNode*)malloc(sizeof(ZNode) + len);
-    AVLNode::initNode(&node->_treeN);
-    node->_hashN.next = nullptr;
-    node->_hashN.code = str_hash((uint8_t*)name, len);
-    node->_score = score;
-    node->_len = len;
-    memcpy(&node->_name[0], name, len);
-    return node;
+    treeNode.init();
+    hashNode.next = nullptr;
+    hashNode.code = str_hash(reinterpret_cast<const uint8_t*>(name.data()), name.size());
 }
 
-void ZNode::destroyNode(ZNode* node)
+ZNode* ZNode::fromTree(AVLNode* node)
 {
-    free(node);
+    if (!node)
+        return nullptr;
+    return reinterpret_cast<ZNode*>(reinterpret_cast<char*>(node) - offsetof(ZNode, treeNode));
+}
+
+ZNode* ZNode::fromHash(HNode* node)
+{
+    if (!node)
+        return nullptr;
+    return reinterpret_cast<ZNode*>(reinterpret_cast<char*>(node) - offsetof(ZNode, hashNode));
 }
 
 bool ZNode::less(AVLNode* ln, AVLNode* rn)
 {
-    ZNode* zl = container_of(ln, ZNode, _treeN);
-    ZNode* zr = container_of(rn, ZNode, _treeN);
-    if (zl->_score != zr->_score)
-        return zl->_score < zr->_score;
-
-    int rv = memcmp(zl->_name, zr->_name, (zl->_len < zr->_len ? zl->_len : zr->_len));
-    return (rv != 0) ? rv < 0 : zl->_len < zr->_len;
+    ZNode* zl = fromTree(ln);
+    ZNode* zr = fromTree(rn);
+    if (zl->score != zr->score)
+        return zl->score < zr->score;
+    return zl->name < zr->name;
 }
 
-ZNode* ZNode::offset(ZNode* node, int64_t offset)
+bool ZNode::less(AVLNode* ln, double score, const std::string& name)
 {
-    AVLNode* treeN = node ? AVLNode::offset(&node->_treeN, offset) : nullptr;
-    return treeN ? container_of(treeN, ZNode, _treeN) : nullptr;
+    ZNode* znode = fromTree(ln);
+    if (znode->score != score)
+        return znode->score < score;
+    return znode->name < name;
 }
 
-ZSET::Entry::Entry(uint32_t type) : _type(type)
+ZNode* ZNode::offset(ZNode* node, int64_t off)
 {
-    assert(_type == ZSET::T_STR || _type == ZSET::T_ZSET);
-    // call constructor
-    if (_type == ZSET::T_STR)
-        new (&str) std::string();
-    else if (_type == ZSET::T_ZSET)
-        new (&zset) ZSet();
+    AVLNode* treeN = node ? AVLNode::offset(&node->treeNode, off) : nullptr;
+    return fromTree(treeN);
 }
 
-ZSET::Entry::~Entry()
-{
-    // call destructor
-    if (_type == ZSET::T_STR)
-        str.~basic_string();
-    else if (_type == ZSET::T_ZSET)
-        zset.~ZSet();
-}
+// --- ZSet ---
 
-ZNode* ZSet::LookUp(const char* name, size_t len)
+ZNode* ZSet::lookUp(const std::string& name)
 {
-    if (_tree._root == nullptr)
+    if (_tree.root() == nullptr)
         return nullptr;
 
     ZSET::HKey key;
-    key._hashN.code = str_hash((uint8_t*)name, len);
-    key._name = name;
-    key._len = len;
-    HNode* found = HashMap::lookup(&_map, &key._hashN, ZSET::HKey::cmp);
-    return found == nullptr ? nullptr : container_of(found, ZNode, _hashN);
+    key.hashNode.code = str_hash(reinterpret_cast<const uint8_t*>(name.data()), name.size());
+    key.name = name;
+    HNode* found = _map.lookup(&key.hashNode, ZSET::HKey::cmp);
+    return found ? ZNode::fromHash(found) : nullptr;
 }
 
-bool ZSet::Insert(ZNode* node, double score)
+bool ZSet::insert(const std::string& name, double score)
 {
-    if (ZNode* found = LookUp(node->_name, node->_len)) // already exists, it is updated
+    if (ZNode* found = lookUp(name))
     {
-        updateScore(found, score);
+        update(found, score);
         return false;
     }
 
-    ZNode* newNode = ZNode::createNode(node->_name, node->_len, score);
-    HashMap::insert(&_map, &newNode->_hashN);
-    AVLTree::searchAndInsert(&_tree._root, &newNode->_treeN, ZNode::less);
+    ZNode* node = new ZNode(name, score);
+    _map.insert(&node->hashNode);
+    _tree.insert(&node->treeNode, static_cast<bool (*)(AVLNode*, AVLNode*)>(ZNode::less));
     return true;
 }
 
-void ZSet::Update(ZNode* node, double score)
+void ZSet::update(ZNode* node, double score)
 {
-    _tree._root = AVLNode::deleteNode(&node->_treeN);
-    AVLNode::initNode(&node->_treeN);
-    node->_score = score;
+    _tree.setRoot(AVLNode::deleteNode(&node->treeNode));
+    node->treeNode.init();
+    node->score = score;
     treeInsert(node);
 }
 
-void ZSet::Delete(ZNode* node)
+void ZSet::remove(ZNode* node)
 {
     ZSET::HKey key;
-    key._hashN.code = node->_hashN.code;
-    key._name = node->_name;
-    key._len = node->_len;
-    HNode* found = HashMap::remove(&_map, &key._hashN, ZSET::HKey::cmp);
+    key.hashNode.code = node->hashNode.code;
+    key.name = node->name;
+    HNode* found = _map.remove(&key.hashNode, ZSET::HKey::cmp);
     assert(found);
-    _tree._root = AVLNode::deleteNode(&node->_treeN);
-    ZNode::destroyNode(node);
+    (void)found;
+
+    _tree.setRoot(AVLNode::deleteNode(&node->treeNode));
+    delete node;
 }
 
-bool ZNode::less(AVLNode* ln, double score, const char* name, size_t len)
-{
-    ZNode* znode = container_of(ln, ZNode, _treeN);
-    if (znode->_score != score)
-        return znode->_score < score;
-    int rv = memcmp(znode->_name, name, (znode->_len < len ? znode->_len : len));
-    return (rv != 0) ? rv < 0 : znode->_len < len;
-}
-
-ZNode* ZSet::Seekge(double score, const char* name, size_t len)
+ZNode* ZSet::seekGe(double score, const std::string& name)
 {
     AVLNode* found = nullptr;
-    for (AVLNode* currentN = _tree._root; currentN != nullptr;)
+    for (AVLNode* cur = _tree.root(); cur != nullptr;)
     {
-        if (ZNode::less(currentN, score, name, len))
-            currentN = currentN->right;
+        if (ZNode::less(cur, score, name))
+            cur = cur->right;
         else
         {
-            found = currentN;
-            currentN = currentN->left;
+            found = cur;
+            cur = cur->left;
         }
     }
-    return found ? container_of(found, ZNode, _treeN) : nullptr;
-}
-
-void ZSet::updateScore(ZNode* node, double score)
-{
-    _tree._root = AVLNode::deleteNodeEasy(&node->_treeN);
-    AVLNode::initNode(&node->_treeN);
-    node->_score = score;
-    treeInsert(node);
+    return ZNode::fromTree(found);
 }
 
 void ZSet::treeInsert(ZNode* node)
 {
     AVLNode* parent = nullptr;
-    AVLNode** from = &_tree._root;
+    AVLNode* root = _tree.root();
+    AVLNode** from = &root;
+
     while (*from)
     {
         parent = *from;
-        from = ZNode::less(&node->_treeN, parent) ? &parent->left : &parent->right;
+        from = static_cast<bool (*)(AVLNode*, AVLNode*)>(ZNode::less)(&node->treeNode, parent) ? &parent->left
+                                                                                               : &parent->right;
     }
-    *from = &node->_treeN;
-    node->_treeN.parent = parent;
-    _tree._root = AVLNode::balance(&node->_treeN);
+    *from = &node->treeNode;
+    node->treeNode.parent = parent;
+    _tree.setRoot(AVLNode::balance(&node->treeNode));
 }
 
-bool ZSET::HKey::cmp(HNode* node, HNode* keyHNode)
-{
-    ZNode* znode = container_of(node, ZNode, _hashN);
-    ZSET::HKey* hkey = container_of(keyHNode, ZSET::HKey, _hashN);
+// --- ZSET::HKey ---
 
-    if (znode->_len != hkey->_len)
-        return false;
-    return 0 == memcmp(znode->_name, hkey->_name, znode->_len);
+bool ZSET::HKey::cmp(HNode* node, HNode* keyNode)
+{
+    ZNode* znode = ZNode::fromHash(node);
+    ZSET::HKey* hkey = reinterpret_cast<ZSET::HKey*>(reinterpret_cast<char*>(keyNode) - offsetof(ZSET::HKey, hashNode));
+
+    return znode->name == hkey->name;
 }

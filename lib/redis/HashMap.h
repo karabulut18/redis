@@ -1,9 +1,10 @@
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-
-#include <assert.h>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <vector>
 
 struct HNode
 {
@@ -11,29 +12,63 @@ struct HNode
     uint64_t code = 0;
 };
 
-struct HashTable
+// Comparator type: returns true if two HNodes are equal
+using HNodeEq = std::function<bool(HNode*, HNode*)>;
+
+class HashTable
 {
-    HNode** table = nullptr;
-    size_t mask = 0; // power of  2, array size 2^n -1
-    size_t size = 0; // number of keys
-    static void init(HashTable* table, size_t size);
-    static void insert(HashTable* table, HNode* node);
-    static HNode** lookup(HashTable* tab, HNode* key, bool (*eq)(HNode*, HNode*));
-    static HNode* detach(HashTable* tab, HNode** from);
+public:
+    HashTable() = default;
+
+    void init(size_t size);
+    void insert(HNode* node);
+    HNode** lookup(HNode* key, const HNodeEq& eq);
+    HNode* detach(HNode** from);
+
+    size_t size() const
+    {
+        return _size;
+    }
+    bool empty() const
+    {
+        return _table.empty();
+    }
+    void clear();
+
+    // Access to internals for rehashing
+    HNode*& bucketAt(size_t index)
+    {
+        return _table[index];
+    }
+    size_t mask() const
+    {
+        return _mask;
+    }
+
+private:
+    std::vector<HNode*> _table;
+    size_t _mask = 0;
+    size_t _size = 0;
 };
 
-struct HashMap
+class HashMap
 {
-    HashTable older;
-    HashTable newer;
-    size_t migrate_position = 0;
-    const size_t k_max_load_factor = 8;
-    const size_t k_rehashing_work = 128;
+public:
+    HashMap() = default;
 
-    static HNode* lookup(HashMap* hmap, HNode* key, bool (*eq)(HNode*, HNode*));
-    static void trigger_rehashing(HashMap* hmap);
-    static void insert(HashMap* hmap, HNode* node);
-    static HNode* remove(HashMap* hmap, HNode* key, bool (*eq)(HNode*, HNode*));
-    static void help_rehashing(HashMap* hmap);
-    static void clear(HashMap* hmap);
+    HNode* lookup(HNode* key, const HNodeEq& eq);
+    void insert(HNode* node);
+    HNode* remove(HNode* key, const HNodeEq& eq);
+    void clear();
+
+private:
+    void triggerRehashing();
+    void helpRehashing();
+
+    HashTable _newer;
+    HashTable _older;
+    size_t _migratePosition = 0;
+
+    static const size_t MAX_LOAD_FACTOR = 8;
+    static const size_t REHASHING_WORK = 128;
 };
