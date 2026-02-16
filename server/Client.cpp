@@ -56,7 +56,7 @@ void Client::HandleCommand(const std::vector<RespValue>& args)
     {
         response.type = RespType::SimpleString;
         if (args.size() > 1)
-            response.value = args[1].getString(); // PING with message
+            response.value = args[1].getString();
         else
             response.value = std::string_view("PONG");
         SendResponse(response);
@@ -72,8 +72,26 @@ void Client::HandleCommand(const std::vector<RespValue>& args)
         }
         std::string key(args[1].getString());
         std::string value(args[2].getString());
-        getDatabase().set(key, value);
 
+        // Parse optional flags: EX seconds | PX milliseconds
+        int64_t ttlMs = -1;
+        for (size_t i = 3; i < args.size(); i++)
+        {
+            std::string opt(args[i].getString());
+            for (char& c : opt)
+                c = toupper(c);
+
+            if (opt == "EX" && i + 1 < args.size())
+            {
+                ttlMs = std::stoll(std::string(args[++i].getString())) * 1000;
+            }
+            else if (opt == "PX" && i + 1 < args.size())
+            {
+                ttlMs = std::stoll(std::string(args[++i].getString()));
+            }
+        }
+
+        getDatabase().set(key, value, ttlMs);
         response.type = RespType::SimpleString;
         response.value = std::string_view("OK");
         SendResponse(response);
@@ -120,6 +138,87 @@ void Client::HandleCommand(const std::vector<RespValue>& args)
         }
         response.type = RespType::Integer;
         response.value = deleted;
+        SendResponse(response);
+    }
+    else if (cmd == "EXPIRE")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'expire' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t seconds = std::stoll(std::string(args[2].getString()));
+        bool ok = getDatabase().expire(key, seconds * 1000);
+        response.type = RespType::Integer;
+        response.value = ok ? int64_t(1) : int64_t(0);
+        SendResponse(response);
+    }
+    else if (cmd == "PEXPIRE")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'pexpire' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t ms = std::stoll(std::string(args[2].getString()));
+        bool ok = getDatabase().expire(key, ms);
+        response.type = RespType::Integer;
+        response.value = ok ? int64_t(1) : int64_t(0);
+        SendResponse(response);
+    }
+    else if (cmd == "TTL")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'ttl' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t pttl = getDatabase().pttl(key);
+
+        response.type = RespType::Integer;
+        if (pttl >= 0)
+            response.value = pttl / 1000; // convert ms → seconds
+        else
+            response.value = pttl; // -1 or -2
+        SendResponse(response);
+    }
+    else if (cmd == "PTTL")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'pttl' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t pttl = getDatabase().pttl(key);
+        response.type = RespType::Integer;
+        response.value = pttl;
+        SendResponse(response);
+    }
+    else if (cmd == "PERSIST")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'persist' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        bool ok = getDatabase().persist(key);
+        response.type = RespType::Integer;
+        response.value = ok ? int64_t(1) : int64_t(0);
         SendResponse(response);
     }
     else
