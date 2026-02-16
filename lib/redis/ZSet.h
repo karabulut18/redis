@@ -26,6 +26,7 @@ class ZSet
 {
 public:
     ZSet() = default;
+    ~ZSet();
 
     ZNode* lookUp(const std::string& name);
     bool insert(const std::string& name, double score);
@@ -34,37 +35,26 @@ public:
 
     ZNode* seekGe(double score, const std::string& name);
 
+    size_t size() const
+    {
+        return _size;
+    }
+
+    AVLTree& tree()
+    {
+        return _tree;
+    }
+
 private:
     void treeInsert(ZNode* node);
 
     AVLTree _tree;
     HashMap _map;
+    size_t _size = 0;
 };
 
 namespace ZSET
 {
-    enum Type
-    {
-        T_INIT = 0,
-        T_STR = 1,
-        T_ZSET = 2
-    };
-
-    struct Entry
-    {
-        HNode hashNode;
-        std::string key;
-        Type type = T_INIT;
-
-        // Data storage — only one is active based on type
-        std::string str;
-        ZSet zset;
-
-        explicit Entry(Type t) : type(t)
-        {
-        }
-    };
-
     struct HKey
     {
         HNode hashNode;

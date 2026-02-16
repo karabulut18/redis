@@ -244,6 +244,98 @@ void test_rename()
     std::cout << "PASS\n";
 }
 
+void test_zsets()
+{
+    std::cout << "Database: ZSets... ";
+    Database db;
+
+    // ZADD
+    assert(db.zadd("zkey", 10.0, "m1") == true);
+    assert(db.zadd("zkey", 20.0, "m2") == true);
+    assert(db.zadd("zkey", 15.0, "m1") == false); // updated existing
+    assert(db.zcard("zkey") == 2);
+
+    // ZSCORE
+    auto score = db.zscore("zkey", "m1");
+    assert(score.has_value());
+    assert(*score == 15.0);
+    assert(!db.zscore("zkey", "m3").has_value());
+
+    // ZRANGE
+    auto range = db.zrange("zkey", 0, -1);
+    assert(range.size() == 2);
+    assert(range[0].member == "m1");
+    assert(range[0].score == 15.0);
+    assert(range[1].member == "m2");
+    assert(range[1].score == 20.0);
+
+    // ZRANGEBYSCORE
+    auto rangeByScore = db.zrangebyscore("zkey", 18.0, 25.0);
+    assert(rangeByScore.size() == 1);
+    assert(rangeByScore[0].member == "m2");
+
+    // ZREM
+    assert(db.zrem("zkey", "m1") == true);
+    assert(db.zcard("zkey") == 1);
+    assert(db.zrem("zkey", "m1") == false);
+
+    // TYPE
+    assert(db.getType("zkey") == EntryType::ZSET);
+    db.set("skey", "val");
+    assert(db.getType("skey") == EntryType::STRING);
+
+    // Overwrite ZSET with STRING (SET command)
+    db.set("zkey", "converted");
+    assert(db.getType("zkey") == EntryType::STRING);
+    assert(*db.get("zkey") == "converted");
+
+    // Empty ZSET should be deleted
+    db.zadd("zempty", 1.0, "m1");
+    assert(db.exists("zempty"));
+    db.zrem("zempty", "m1");
+    assert(!db.exists("zempty"));
+
+    std::cout << "PASS\n";
+}
+
+void test_hashes()
+{
+    std::cout << "Database: Hashes... ";
+    Database db;
+
+    // HSET
+    assert(db.hset("hkey", "f1", "v1") == 1);     // New
+    assert(db.hset("hkey", "f2", "v2") == 1);     // New
+    assert(db.hset("hkey", "f1", "v1_new") == 0); // Update
+    assert(db.hlen("hkey") == 2);
+
+    // HGET
+    auto val = db.hget("hkey", "f1");
+    assert(val.has_value());
+    assert(*val == "v1_new");
+    assert(!db.hget("hkey", "f3").has_value());
+
+    // HDEL
+    assert(db.hdel("hkey", "f1") == 1);
+    assert(db.hlen("hkey") == 1);
+    assert(db.hdel("hkey", "f1") == 0);
+
+    // HGETALL
+    auto all = db.hgetall("hkey");
+    assert(all.size() == 1);
+    assert(all[0].field == "f2");
+    assert(all[0].value == "v2");
+
+    // TYPE
+    assert(db.getType("hkey") == EntryType::HASH);
+
+    // Empty hash cleanup
+    db.hdel("hkey", "f2");
+    assert(!db.exists("hkey"));
+
+    std::cout << "PASS\n";
+}
+
 int main()
 {
     std::cout << "=== Database Tests ===\n";
@@ -256,6 +348,8 @@ int main()
     test_exists();
     test_keys();
     test_rename();
+    test_zsets();
+    test_hashes();
     std::cout << "All Database tests passed!\n";
     return 0;
 }

@@ -34,10 +34,13 @@ std::string RespParser::encode(const RespValue& value)
         out += ":" + std::to_string(value.getInt()) + "\r\n";
         break;
     case RespType::BulkString:
-        out += "$" + std::to_string(value.getString().length()) + "\r\n";
-        out.append(value.getString());
+    {
+        std::string_view sv = value.getString();
+        out += "$" + std::to_string(sv.length()) + "\r\n";
+        out.append(sv);
         out.append("\r\n");
         break;
+    }
     case RespType::Null:
         out += "$-1\r\n";
         break;

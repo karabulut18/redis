@@ -1,12 +1,37 @@
 #pragma once
 
 #include "HashMap.h"
+#include "ZSet.h"
 #include "str_hash.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
+
+enum class EntryType
+{
+    STRING,
+    ZSET,
+    HASH
+};
+
+struct HEntry
+{
+    HNode node;
+    std::string key;
+    std::string value;
+
+    // Helper to get HEntry from HNode
+    static HEntry* fromHash(HNode* node)
+    {
+        if (!node)
+            return nullptr;
+        return reinterpret_cast<HEntry*>(reinterpret_cast<char*>(node) - offsetof(HEntry, node));
+    }
+};
 
 // Represents a single key-value entry in the database.
 // Uses intrusive HNode for HashMap storage.
@@ -14,10 +39,16 @@ struct Entry
 {
     HNode hashNode;
     std::string key;
-    std::string value;
-    int64_t expiresAt = -1; // millisecond timestamp, -1 = no expiry
+    EntryType type;
+    std::string value;       // For STRING
+    ZSet* zset = nullptr;    // For ZSET
+    HashMap* hash = nullptr; // For HASH
+    int64_t expiresAt = -1;  // millisecond timestamp, -1 = no expiry
 
     Entry(const std::string& k, const std::string& v);
+    Entry(const std::string& k, ZSet* z);
+    Entry(const std::string& k, HashMap* h);
+    ~Entry();
 
     bool hasExpiry() const
     {
@@ -53,33 +84,84 @@ public:
     Database() = default;
     ~Database();
 
+    // --- String Commands ---
+
     // SET key value — inserts or overwrites. Returns true if new, false if updated.
-    // ttlMs: optional TTL in milliseconds (-1 = no expiry)
     bool set(const std::string& key, const std::string& value, int64_t ttlMs = -1);
 
     // GET key — returns pointer to value if found (and not expired), nullptr otherwise.
     const std::string* get(const std::string& key);
 
-    // DEL key — removes entry. Returns true if key existed (even if expired).
+    // --- ZSet Commands ---
+
+    // ZADD key score member
+    bool zadd(const std::string& key, double score, const std::string& member);
+
+    // ZREM key member
+    bool zrem(const std::string& key, const std::string& member);
+
+    // ZCARD key
+    int64_t zcard(const std::string& key);
+
+    // ZSCORE key member
+    std::optional<double> zscore(const std::string& key, const std::string& member);
+
+    // ZRANGE key start stop
+    struct ZRangeResult
+    {
+        std::string_view member;
+        double score;
+    };
+    std::vector<ZRangeResult> zrange(const std::string& key, int64_t start, int64_t stop);
+
+    // ZRANGEBYSCORE key min max
+    std::vector<ZRangeResult> zrangebyscore(const std::string& key, double min, double max);
+
+    // --- Hash Commands ---
+
+    // Returns 1 if field is new and value was set.
+    // Returns 0 if field already existed and was updated.
+    // Returns -1 if WRONGTYPE.
+    int hset(const std::string& key, const std::string& field, const std::string& value);
+
+    std::optional<std::string_view> hget(const std::string& key, const std::string& field);
+
+    // Returns 1 if field was removed, 0 if not found. -1 if WRONGTYPE.
+    int hdel(const std::string& key, const std::string& field);
+
+    int64_t hlen(const std::string& key);
+
+    struct HGetAllResult
+    {
+        std::string field;
+        std::string value;
+    };
+    std::vector<HGetAllResult> hgetall(const std::string& key);
+
+    // --- Key Management ---
+
+    // DEL key — removes entry. Returns true if key existed.
     bool del(const std::string& key);
 
-    // EXPIRE key — set expiry in milliseconds from now. Returns true if key exists.
+    // EXPIRE key — set expiry in milliseconds from now.
     bool expire(const std::string& key, int64_t ttlMs);
 
-    // PERSIST key — remove expiry. Returns true if key exists and had an expiry.
+    // PERSIST key — remove expiry.
     bool persist(const std::string& key);
 
-    // TTL key — returns remaining time in milliseconds.
-    // Returns -1 if no expiry, -2 if key doesn't exist.
+    // TTL key — returns remaining time.
     int64_t pttl(const std::string& key);
 
-    // EXISTS key — returns true if key exists and is not expired.
+    // EXISTS key — returns true if key exists.
     bool exists(const std::string& key);
+
+    // TYPE key — returns key type.
+    EntryType getType(const std::string& key);
 
     // KEYS pattern — returns all keys matching pattern (* = all).
     std::vector<std::string> keys(const std::string& pattern);
 
-    // RENAME key newkey — renames key. Returns false if key doesn't exist.
+    // RENAME key newkey — renames key.
     bool rename(const std::string& key, const std::string& newkey);
 
     size_t size() const
@@ -88,13 +170,12 @@ public:
     }
 
 private:
-    // Find entry (returns nullptr if not found or expired, auto-deletes expired)
-    Entry* findEntry(const std::string& key);
+    // Find entry (returns nullptr if not found, WRONGTYPE, or expired)
+    Entry* findEntry(const std::string& key, std::optional<EntryType> expectedType = std::nullopt);
 
-    // Find entry without expiry check (raw lookup)
+    // Raw lookup without expiry or type check
     Entry* findEntryRaw(const std::string& key);
 
-    // Remove and delete an entry by its HNode
     void removeEntry(Entry* entry);
 
     HashMap _map;

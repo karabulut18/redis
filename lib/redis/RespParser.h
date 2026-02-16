@@ -30,7 +30,7 @@ enum class RespStatus
 
 struct RespValue;
 
-using RespVariant = std::variant<std::monostate, std::string_view, int64_t, std::vector<RespValue>,
+using RespVariant = std::variant<std::monostate, std::string_view, std::string, int64_t, std::vector<RespValue>,
                                  std::vector<std::pair<RespValue, RespValue>>, bool>;
 
 struct RespValue
@@ -48,13 +48,18 @@ struct RespValue
         return std::get<int64_t>(value);
     }
 
-    std::string_view& getString()
+    std::string_view getString() const
     {
+        if (std::holds_alternative<std::string>(value))
+            return std::get<std::string>(value);
         return std::get<std::string_view>(value);
     }
-    const std::string_view& getString() const
+
+    // Note: Use this when you need RespValue to own the string (e.g. created from temporary).
+    // If you have a string that outlives RespValue (like from DB), use string_view variant.
+    void setStringOwned(std::string s)
     {
-        return std::get<std::string_view>(value);
+        value = std::move(s);
     }
 
     bool& getBool()

@@ -120,7 +120,7 @@ void Client::Ping()
 {
     static RespValue val;
     val.type = RespType::SimpleString;
-    val.value = "PING";
+    val.value = std::string_view("PING");
     std::string encoded = RespParser::encode(val);
     _connection->Send(encoded.c_str(), encoded.length());
 }

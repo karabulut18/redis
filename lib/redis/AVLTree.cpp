@@ -140,6 +140,15 @@ AVLNode* AVLNode::deleteNode(AVLNode* node)
     return root;
 }
 
+AVLNode* AVLNode::findMin(AVLNode* node)
+{
+    if (!node)
+        return nullptr;
+    while (node->left)
+        node = node->left;
+    return node;
+}
+
 AVLNode* AVLNode::successor(AVLNode* node)
 {
     if (node->right)

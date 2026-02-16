@@ -74,6 +74,7 @@ bool ZSet::insert(const std::string& name, double score)
     ZNode* node = new ZNode(name, score);
     _map.insert(&node->hashNode);
     _tree.insert(&node->treeNode, static_cast<bool (*)(AVLNode*, AVLNode*)>(ZNode::less));
+    _size++;
     return true;
 }
 
@@ -95,6 +96,7 @@ void ZSet::remove(ZNode* node)
     (void)found;
 
     _tree.setRoot(AVLNode::deleteNode(&node->treeNode));
+    _size--;
     delete node;
 }
 
@@ -129,6 +131,32 @@ void ZSet::treeInsert(ZNode* node)
     *from = &node->treeNode;
     node->treeNode.parent = parent;
     _tree.setRoot(AVLNode::balance(&node->treeNode));
+}
+
+ZSet::~ZSet()
+{
+    // Safely delete all ZNodes from both tables
+    for (size_t i = 0; !_map.newer().empty() && i <= _map.newer().mask(); ++i)
+    {
+        HNode* node = _map.newer().bucketAt(i);
+        while (node)
+        {
+            HNode* next = node->next;
+            delete ZNode::fromHash(node);
+            node = next;
+        }
+    }
+    for (size_t i = 0; !_map.older().empty() && i <= _map.older().mask(); ++i)
+    {
+        HNode* node = _map.older().bucketAt(i);
+        while (node)
+        {
+            HNode* next = node->next;
+            delete ZNode::fromHash(node);
+            node = next;
+        }
+    }
+    _map.clear();
 }
 
 // --- ZSET::HKey ---
