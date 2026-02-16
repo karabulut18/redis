@@ -637,6 +637,352 @@ void Client::HandleCommand(const std::vector<RespValue>& args)
         }
         SendResponse(response);
     }
+    // --- List Commands ---
+    else if (cmd == "LPUSH")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'lpush' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t len = 0;
+
+        for (size_t i = 2; i < args.size(); ++i)
+        {
+            len = getDatabase().lpush(key, std::string(args[i].getString()));
+            if (len == -1)
+                break;
+        }
+
+        if (len == -1)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        else
+        {
+            response.type = RespType::Integer;
+            response.value = len;
+        }
+        SendResponse(response);
+    }
+    else if (cmd == "RPUSH")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'rpush' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t len = 0;
+        for (size_t i = 2; i < args.size(); ++i)
+        {
+            len = getDatabase().rpush(key, std::string(args[i].getString()));
+            if (len == -1)
+                break;
+        }
+
+        if (len == -1)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        else
+        {
+            response.type = RespType::Integer;
+            response.value = len;
+        }
+        SendResponse(response);
+    }
+    else if (cmd == "LPOP")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'lpop' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+
+        EntryType type = getDatabase().getType(key);
+        if (getDatabase().exists(key) && type != EntryType::LIST)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        auto val = getDatabase().lpop(key);
+
+        if (!val)
+        {
+            response.type = RespType::Null;
+        }
+        else
+        {
+            response.type = RespType::BulkString;
+            response.setStringOwned(*val);
+        }
+        SendResponse(response);
+    }
+    else if (cmd == "RPOP")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'rpop' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+
+        EntryType type = getDatabase().getType(key);
+        if (getDatabase().exists(key) && type != EntryType::LIST)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        auto val = getDatabase().rpop(key);
+
+        if (!val)
+        {
+            response.type = RespType::Null;
+        }
+        else
+        {
+            response.type = RespType::BulkString;
+            response.setStringOwned(*val);
+        }
+        SendResponse(response);
+    }
+    else if (cmd == "LLEN")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'llen' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+
+        EntryType type = getDatabase().getType(key);
+        if (getDatabase().exists(key) && type != EntryType::LIST)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        int64_t len = getDatabase().llen(key);
+        response.type = RespType::Integer;
+        response.value = len;
+        SendResponse(response);
+    }
+    else if (cmd == "LRANGE")
+    {
+        if (args.size() < 4)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'lrange' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int64_t start = 0;
+        int64_t stop = 0;
+
+        try
+        {
+            start = std::stoll(std::string(args[2].getString()));
+            stop = std::stoll(std::string(args[3].getString()));
+        }
+        catch (...)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR value is not an integer or out of range");
+            SendResponse(response);
+            return;
+        }
+
+        EntryType type = getDatabase().getType(key);
+        if (getDatabase().exists(key) && type != EntryType::LIST)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        auto items = getDatabase().lrange(key, start, stop);
+        response.type = RespType::Array;
+        std::vector<RespValue> arr;
+        arr.reserve(items.size());
+
+        for (const auto& item : items)
+        {
+            RespValue v;
+            v.type = RespType::BulkString;
+            v.setStringOwned(item);
+            arr.push_back(v);
+        }
+        response.value = std::move(arr);
+        SendResponse(response);
+    }
+    // --- Set Commands ---
+    else if (cmd == "SADD")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'sadd' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int added = 0;
+
+        for (size_t i = 2; i < args.size(); ++i)
+        {
+            int res = getDatabase().sadd(key, std::string(args[i].getString()));
+            if (res == -1)
+            {
+                response.type = RespType::Error;
+                response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+                SendResponse(response);
+                return;
+            }
+            added += res;
+        }
+
+        response.type = RespType::Integer;
+        response.value = static_cast<int64_t>(added);
+        SendResponse(response);
+    }
+    else if (cmd == "SREM")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'srem' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        int removed = 0;
+
+        EntryType type = getDatabase().getType(key);
+        if (getDatabase().exists(key) && type != EntryType::SET)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        for (size_t i = 2; i < args.size(); ++i)
+        {
+            removed += getDatabase().srem(key, std::string(args[i].getString()));
+        }
+
+        response.type = RespType::Integer;
+        response.value = static_cast<int64_t>(removed);
+        SendResponse(response);
+    }
+    else if (cmd == "SISMEMBER")
+    {
+        if (args.size() < 3)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'sismember' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+        std::string member(args[2].getString());
+
+        if (getDatabase().exists(key) && getDatabase().getType(key) != EntryType::SET)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        int res = getDatabase().sismember(key, member);
+        response.type = RespType::Integer;
+        response.value = static_cast<int64_t>(res);
+        SendResponse(response);
+    }
+    else if (cmd == "SMEMBERS")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'smembers' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+
+        if (getDatabase().exists(key) && getDatabase().getType(key) != EntryType::SET)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        auto members = getDatabase().smembers(key);
+        response.type = RespType::Array;
+
+        std::vector<RespValue> arr;
+        arr.reserve(members.size());
+        for (const auto& m : members)
+        {
+            RespValue v;
+            v.type = RespType::BulkString;
+            v.setStringOwned(m);
+            arr.push_back(v);
+        }
+        response.value = std::move(arr);
+        SendResponse(response);
+    }
+    else if (cmd == "SCARD")
+    {
+        if (args.size() < 2)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("ERR wrong number of arguments for 'scard' command");
+            SendResponse(response);
+            return;
+        }
+        std::string key(args[1].getString());
+
+        if (getDatabase().exists(key) && getDatabase().getType(key) != EntryType::SET)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            SendResponse(response);
+            return;
+        }
+
+        int64_t card = getDatabase().scard(key);
+        response.type = RespType::Integer;
+        response.value = card;
+        SendResponse(response);
+    }
     else
     {
         response.type = RespType::Error;

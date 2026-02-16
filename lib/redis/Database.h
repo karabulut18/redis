@@ -6,16 +6,20 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 enum class EntryType
 {
     STRING,
     ZSET,
-    HASH
+    HASH,
+    LIST,
+    SET
 };
 
 struct HEntry
@@ -40,14 +44,18 @@ struct Entry
     HNode hashNode;
     std::string key;
     EntryType type;
-    std::string value;       // For STRING
-    ZSet* zset = nullptr;    // For ZSET
-    HashMap* hash = nullptr; // For HASH
-    int64_t expiresAt = -1;  // millisecond timestamp, -1 = no expiry
+    std::string value;                              // For STRING
+    ZSet* zset = nullptr;                           // For ZSET
+    HashMap* hash = nullptr;                        // For HASH
+    std::deque<std::string>* list = nullptr;        // For LIST
+    std::unordered_set<std::string>* set = nullptr; // For SET
+    int64_t expiresAt = -1;                         // millisecond timestamp, -1 = no expiry
 
     Entry(const std::string& k, const std::string& v);
     Entry(const std::string& k, ZSet* z);
     Entry(const std::string& k, HashMap* h);
+    Entry(const std::string& k, std::deque<std::string>* l);
+    Entry(const std::string& k, std::unordered_set<std::string>* s);
     ~Entry();
 
     bool hasExpiry() const
@@ -137,6 +145,39 @@ public:
         std::string value;
     };
     std::vector<HGetAllResult> hgetall(const std::string& key);
+
+    // --- List Commands ---
+
+    // Returns the length of the list after the push operation.
+    int64_t lpush(const std::string& key, const std::string& value);
+    int64_t rpush(const std::string& key, const std::string& value);
+
+    // Returns popped value or std::nullopt if list is empty or key not found.
+    std::optional<std::string> lpop(const std::string& key);
+    std::optional<std::string> rpop(const std::string& key);
+
+    // Returns list length. 0 if key does not exist.
+    int64_t llen(const std::string& key);
+
+    // Returns list elements in range [start, stop].
+    std::vector<std::string> lrange(const std::string& key, int64_t start, int64_t stop);
+
+    // --- Set Commands ---
+
+    // Returns 1 if member was added, 0 if it was already present.
+    int sadd(const std::string& key, const std::string& member);
+
+    // Returns 1 if member was removed, 0 if it was not present.
+    int srem(const std::string& key, const std::string& member);
+
+    // Returns 1 if member is present, 0 if not.
+    int sismember(const std::string& key, const std::string& member);
+
+    // Returns all members.
+    std::vector<std::string> smembers(const std::string& key);
+
+    // Returns set cardinality (size).
+    int64_t scard(const std::string& key);
 
     // --- Key Management ---
 

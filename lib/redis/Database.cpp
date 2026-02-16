@@ -56,6 +56,14 @@ Entry::~Entry()
         safelyDeleteEntries(const_cast<HashTable&>(hash->older()));
         delete hash;
     }
+    else if (type == EntryType::LIST && list)
+    {
+        delete list;
+    }
+    else if (type == EntryType::SET && set)
+    {
+        delete set;
+    }
 }
 
 bool Entry::isExpired() const
@@ -558,4 +566,203 @@ bool Database::rename(const std::string& key, const std::string& newkey)
     _map.insert(&e->hashNode);
     // _size stays the same (or decremented by del(newkey) above)
     return true;
+}
+
+Entry::Entry(const std::string& k, std::deque<std::string>* l) : key(k), type(EntryType::LIST), list(l)
+{
+    hashNode.next = nullptr;
+    hashNode.code = str_hash(key);
+}
+
+// NOTE: Destructor logic for LIST is added via replace_file_content in the next step to inject into existing
+// destructor.
+
+// --- List Commands ---
+
+int64_t Database::lpush(const std::string& key, const std::string& value)
+{
+    Entry* entry = findEntryRaw(key);
+    if (entry && entry->type != EntryType::LIST)
+        return -1; // Wrong type
+
+    if (!entry)
+    {
+        auto list = new std::deque<std::string>();
+        entry = new Entry(key, list);
+        _map.insert(&entry->hashNode);
+        _size++;
+    }
+
+    entry->list->push_front(value);
+    return entry->list->size();
+}
+
+int64_t Database::rpush(const std::string& key, const std::string& value)
+{
+    Entry* entry = findEntryRaw(key);
+    if (entry && entry->type != EntryType::LIST)
+        return -1;
+
+    if (!entry)
+    {
+        auto list = new std::deque<std::string>();
+        entry = new Entry(key, list);
+        _map.insert(&entry->hashNode);
+        _size++;
+    }
+
+    entry->list->push_back(value);
+    return entry->list->size();
+}
+
+std::optional<std::string> Database::lpop(const std::string& key)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry || entry->list->empty())
+        return std::nullopt;
+
+    std::string val = entry->list->front();
+    entry->list->pop_front();
+
+    if (entry->list->empty())
+    {
+        removeEntry(entry);
+    }
+
+    return val;
+}
+
+std::optional<std::string> Database::rpop(const std::string& key)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry || entry->list->empty())
+        return std::nullopt;
+
+    std::string val = entry->list->back();
+    entry->list->pop_back();
+
+    if (entry->list->empty())
+    {
+        removeEntry(entry);
+    }
+
+    return val;
+}
+
+int64_t Database::llen(const std::string& key)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry)
+        return 0;
+    return entry->list->size();
+}
+
+std::vector<std::string> Database::lrange(const std::string& key, int64_t start, int64_t stop)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry)
+        return {};
+
+    int64_t size = entry->list->size();
+
+    // Normalize indices
+    if (start < 0)
+        start = size + start;
+    if (stop < 0)
+        stop = size + stop;
+
+    if (start < 0)
+        start = 0;
+
+    // In Redis, stop is inclusive. If stop is beyond size, limit it.
+    if (stop >= size)
+        stop = size - 1;
+
+    if (start > stop || start >= size)
+        return {};
+
+    std::vector<std::string> result;
+    result.reserve(stop - start + 1);
+
+    for (int64_t i = start; i <= stop; ++i)
+    {
+        result.push_back(entry->list->at(i));
+    }
+
+    return result;
+}
+
+Entry::Entry(const std::string& k, std::unordered_set<std::string>* s) : key(k), type(EntryType::SET), set(s)
+{
+    hashNode.next = nullptr;
+    hashNode.code = str_hash(key);
+}
+
+// NOTE: Destructor cleanup for SET is handled via replace_file_content in the next step.
+
+// --- Set Commands ---
+
+int Database::sadd(const std::string& key, const std::string& member)
+{
+    Entry* entry = findEntryRaw(key);
+    if (entry && entry->type != EntryType::SET)
+        return -1; // Wrong type
+
+    if (!entry)
+    {
+        auto s = new std::unordered_set<std::string>();
+        entry = new Entry(key, s);
+        _map.insert(&entry->hashNode);
+        _size++;
+    }
+
+    auto result = entry->set->insert(member);
+    return result.second ? 1 : 0;
+}
+
+int Database::srem(const std::string& key, const std::string& member)
+{
+    Entry* entry = findEntry(key, EntryType::SET);
+    if (!entry)
+        return 0;
+
+    size_t removed = entry->set->erase(member);
+    if (entry->set->empty())
+    {
+        removeEntry(entry);
+    }
+    return static_cast<int>(removed);
+}
+
+int Database::sismember(const std::string& key, const std::string& member)
+{
+    Entry* entry = findEntry(key, EntryType::SET);
+    if (!entry)
+        return 0;
+
+    return entry->set->count(member) > 0 ? 1 : 0;
+}
+
+std::vector<std::string> Database::smembers(const std::string& key)
+{
+    Entry* entry = findEntry(key, EntryType::SET);
+    if (!entry)
+        return {};
+
+    std::vector<std::string> members;
+    members.reserve(entry->set->size());
+    for (const auto& m : *entry->set)
+    {
+        members.push_back(m);
+    }
+    return members;
+}
+
+int64_t Database::scard(const std::string& key)
+{
+    Entry* entry = findEntry(key, EntryType::SET);
+    if (!entry)
+        return 0;
+
+    return entry->set->size();
 }
