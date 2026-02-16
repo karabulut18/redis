@@ -15,3 +15,10 @@ target_link_libraries(test_database redis_lib)
 
 add_executable(test_resp_parser test_resp_parser.cpp)
 target_link_libraries(test_resp_parser redis_lib)
+
+
+add_executable(test_zset test_zset.cpp)
+target_link_libraries(test_zset redis_lib)
+
+add_executable(test_network test_network.cpp)
+target_link_libraries(test_network redis_lib)

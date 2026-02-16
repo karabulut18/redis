@@ -1,0 +1,8 @@
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/test_ringbuffer.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/test_hashmap.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/test_avltree.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/test_database.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/test_resp_parser.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/test_zset.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/edit_cache.dir
+/Users/saka/Desktop/spaceInvaders/redis/test/CMakeFiles/rebuild_cache.dir

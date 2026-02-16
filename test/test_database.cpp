@@ -5,6 +5,8 @@
 #include <string>
 #include <thread>
 
+void test_sets();
+
 void test_set_get_del()
 {
     std::cout << "Database: SET/GET/DEL basics... ";
@@ -421,6 +423,7 @@ int main()
     test_zsets();
     test_hashes();
     test_lists();
+    test_sets();
     std::cout << "All Database tests passed!\n";
     return 0;
 }
@@ -446,8 +449,10 @@ void test_sets()
     bool m1Found = false, m2Found = false;
     for (const auto& m : members)
     {
-        if (m == "m1") m1Found = true;
-        if (m == "m2") m2Found = true;
+        if (m == "m1")
+            m1Found = true;
+        if (m == "m2")
+            m2Found = true;
     }
     assert(m1Found && m2Found);
 
@@ -462,9 +467,9 @@ void test_sets()
     assert(db.srem("str", "m") == 0); // SREM should maybe return error? My impl returns 0 if not found/wrong type?
     // Let's check srem impl.
     // findEntry(key, SET) -> returns null if wrong type. returns 0.
-    // So returns 0. Consistent with my implementation. Redis returns WRONGTYPE. 
+    // So returns 0. Consistent with my implementation. Redis returns WRONGTYPE.
     // Unit test tests MY implementation.
-    
+
     // Empty cleanup
     db.srem("skey", "m2");
     assert(!db.exists("skey"));

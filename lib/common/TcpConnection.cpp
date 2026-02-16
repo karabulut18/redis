@@ -221,6 +221,11 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
     {
         _outgoing.append(buffer, length);
         _connWrite = true;
+        // Output::GetInstance()->PutF("TcpConnection::Send: Queued %ld bytes, _connWrite=true\n", length);
+        // Can't access Output easily? It's singleton.
+        // #include "Output.h" is needed in .cpp if not present.
+        // It is not included in TcpConnection.cpp.
+        // I'll add printf for now or include Output.
         return;
     }
     else

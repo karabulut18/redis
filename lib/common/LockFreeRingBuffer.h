@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 /**
  * Lock-free Single-Producer-Single-Consumer (SPSC) Ring Buffer
@@ -60,6 +61,26 @@ public:
     }
 
     /**
+     * Push an element to the buffer (producer side) - Move semantics
+     * Returns true if successful, false if buffer is full
+     */
+    bool push(T&& item)
+    {
+        const size_t current_tail = _tail.load(std::memory_order_relaxed);
+        const size_t next_tail = (current_tail + 1) % _capacity;
+
+        // Check if buffer is full
+        if (next_tail == _head.load(std::memory_order_acquire))
+            return false;
+
+        _buffer[current_tail] = std::move(item);
+
+        // Release ensures the write is visible before updating tail
+        _tail.store(next_tail, std::memory_order_release);
+        return true;
+    }
+
+    /**
      * Pop an element from the buffer (consumer side)
      * Returns true if successful, false if buffer is empty
      */
@@ -71,7 +92,7 @@ public:
         if (current_head == _tail.load(std::memory_order_acquire))
             return false;
 
-        item = _buffer[current_head];
+        item = std::move(_buffer[current_head]);
 
         // Release ensures the read completes before updating head
         _head.store((current_head + 1) % _capacity, std::memory_order_release);

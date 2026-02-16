@@ -1,15 +1,14 @@
 #pragma once
 
+#include "ConcurrencyType.h"
+#include "DynamicBuffer.h"
 #include "constants.h"
+#include "frame_header.h"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include "frame_header.h"
-#include "DynamicBuffer.h"
-#include "ConcurrencyType.h"
 
 class ITcpConnection;
-
 
 enum class OwnerType
 {
@@ -30,15 +29,16 @@ enum class ClientState
 class TcpConnection
 {
     ITcpConnection* _owner;
-    OwnerType       _ownerType;
+    OwnerType _ownerType;
     ConcurrencyType _concurencyType = ConcurrencyType::ThreadBased;
 
     std::condition_variable _cv;
-    std::mutex              _cv_mutex;
+    std::mutex _cv_mutex;
 
     std::atomic<ClientState> _state;
 
     char _buffer[TCP_MAX_MESSAGE_SIZE];
+
 public:
     int _port;
     char _ip[IP_NAME_LENGTH];
@@ -61,7 +61,6 @@ public:
     void Stop();
     void Send(const char* buffer, ssize_t length);
     bool IsRunning();
-
 
     void handleWrite();
     void handleRead();
