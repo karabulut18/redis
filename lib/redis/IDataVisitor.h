@@ -4,7 +4,6 @@
 #include <deque>
 #include <string>
 #include <unordered_set>
-#include <vector>
 
 class HashMap;
 class ZSet;
