@@ -10,3 +10,8 @@ inline uint64_t str_hash(const std::string& s)
 {
     return str_hash(reinterpret_cast<const uint8_t*>(s.data()), s.size());
 }
+
+inline uint64_t str_hash(std::string_view s)
+{
+    return str_hash(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+}

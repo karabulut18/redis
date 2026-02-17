@@ -1,10 +1,8 @@
 #pragma once
 
 #include "ConcurrencyType.h"
-#include "DynamicBuffer.h"
 #include "Error.h"
 #include "LockFreeRingBuffer.h"
-#include "frame_header.h"
 #include <atomic>
 #include <condition_variable>
 #include <map>

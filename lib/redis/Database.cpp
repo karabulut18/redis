@@ -11,19 +11,19 @@ int64_t currentTimeMs()
 
 // --- Entry ---
 
-Entry::Entry(const std::string& k, const std::string& v) : key(k), type(EntryType::STRING), value(v)
+Entry::Entry(std::string k, std::string v) : key(std::move(k)), type(EntryType::STRING), value(std::move(v))
 {
     hashNode.next = nullptr;
     hashNode.code = str_hash(key);
 }
 
-Entry::Entry(const std::string& k, ZSet* z) : key(k), type(EntryType::ZSET), zset(z)
+Entry::Entry(std::string k, ZSet* z) : key(std::move(k)), type(EntryType::ZSET), zset(z)
 {
     hashNode.next = nullptr;
     hashNode.code = str_hash(key);
 }
 
-Entry::Entry(const std::string& k, HashMap* h) : key(k), type(EntryType::HASH), hash(h)
+Entry::Entry(std::string k, HashMap* h) : key(std::move(k)), type(EntryType::HASH), hash(h)
 {
     hashNode.next = nullptr;
     hashNode.code = str_hash(key);
@@ -80,7 +80,7 @@ Entry* Entry::fromHash(HNode* node)
 
 // --- LookupKey ---
 
-LookupKey::LookupKey(const std::string& k) : key(k)
+LookupKey::LookupKey(std::string_view k) : key(k)
 {
     hashNode.next = nullptr;
     hashNode.code = str_hash(key);
@@ -95,14 +95,14 @@ bool LookupKey::cmp(HNode* entryNode, HNode* keyNode)
 
 // --- Database internals ---
 
-Entry* Database::findEntryRaw(const std::string& key)
+Entry* Database::findEntryRaw(std::string_view key)
 {
     LookupKey lk(key);
     HNode* found = _map.lookup(&lk.hashNode, LookupKey::cmp);
     return Entry::fromHash(found);
 }
 
-Entry* Database::findEntry(const std::string& key, std::optional<EntryType> expectedType)
+Entry* Database::findEntry(std::string_view key, std::optional<EntryType> expectedType)
 {
     Entry* entry = findEntryRaw(key);
     if (!entry)
@@ -183,7 +183,7 @@ void Database::clear()
     _size = 0;
 }
 
-bool Database::set(const std::string& key, const std::string& value, int64_t ttlMs)
+bool Database::set(std::string_view key, std::string_view value, int64_t ttlMs)
 {
     Entry* existing = findEntryRaw(key);
 
@@ -195,13 +195,13 @@ bool Database::set(const std::string& key, const std::string& value, int64_t ttl
         }
         else
         {
-            existing->value = value;
+            existing->value = std::string(value);
             existing->expiresAt = (ttlMs >= 0) ? currentTimeMs() + ttlMs : -1;
             return false;
         }
     }
 
-    Entry* entry = new Entry(key, value);
+    Entry* entry = new Entry(std::string(key), std::string(value));
     if (ttlMs >= 0)
         entry->expiresAt = currentTimeMs() + ttlMs;
     _map.insert(&entry->hashNode);
@@ -209,62 +209,66 @@ bool Database::set(const std::string& key, const std::string& value, int64_t ttl
     return true;
 }
 
-const std::string* Database::get(const std::string& key)
+const std::string* Database::get(std::string_view key)
 {
     Entry* entry = findEntry(key, EntryType::STRING); // lazy expiration + type check
     return entry ? &entry->value : nullptr;
 }
 
-std::pair<int64_t, bool> Database::incrby(const std::string& key, int64_t increment)
+int64_t Database::incr(std::string_view key)
 {
-    Entry* entry = findEntry(key, EntryType::STRING); // lazy expire check
-    int64_t value = 0;
-
-    if (entry)
-    {
-        // Type check handled by findEntry? No, findEntry(STRING) returns null if wrong type.
-        // But we need to distinguish between "not found" and "wrong type" to return error?
-        // Logic: if not found by findEntry(STRING), check findEntryRaw.
-        // If findEntryRaw exists, it is WRONGTYPE.
-
-        // Wait, simpler:
-        Entry* raw = findEntryRaw(key);
-        if (raw)
-        {
-            if (raw->type != EntryType::STRING)
-                return {0, false}; // WRONGTYPE (signaled by false)
-
-            // Check expiry
-            if (raw->isExpired())
-            {
-                removeEntry(raw);
-                raw = nullptr;
-            }
-        }
-
-        if (raw)
-        {
-            try
-            {
-                value = std::stoll(raw->value);
-            }
-            catch (...)
-            {
-                return {0, false}; // Not an integer
-            }
-            value += increment;
-            raw->value = std::to_string(value);
-            return {value, true};
-        }
-    }
-
-    // Key doesn't exist (or expired)
-    value = increment;
-    set(key, std::to_string(value));
-    return {value, true};
+    return incrby(key, 1);
 }
 
-bool Database::zadd(const std::string& key, double score, const std::string& member)
+int64_t Database::incrby(std::string_view key, int64_t increment)
+{
+    Entry* entry = findEntry(key);
+    if (!entry)
+    {
+        std::string valStr = std::to_string(increment);
+        Entry* newEntry = new Entry(std::string(key), std::move(valStr));
+        _map.insert(&newEntry->hashNode);
+        _size++;
+        return increment;
+    }
+
+    if (entry->type != EntryType::STRING)
+    {
+        throw std::runtime_error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
+    try
+    {
+        int64_t val = std::stoll(entry->value);
+        val += increment;
+        entry->value = std::to_string(val);
+        return val;
+    }
+    catch (...)
+    {
+        throw std::runtime_error("ERR value is not an integer or out of range");
+    }
+}
+
+int64_t Database::decr(std::string_view key)
+{
+    return decrby(key, 1);
+}
+
+int64_t Database::decrby(std::string_view key, int64_t decrement)
+{
+    return incrby(key, -decrement);
+}
+
+EntryType Database::getType(std::string_view key)
+{
+    Entry* entry = findEntry(key);
+    if (!entry)
+        return EntryType::NONE;
+    return entry->type;
+}
+
+bool Database::zadd(std::string_view key, double score, std::string_view member)
 {
     Entry* entry = findEntryRaw(key);
     if (entry && entry->isExpired())
@@ -279,17 +283,17 @@ bool Database::zadd(const std::string& key, double score, const std::string& mem
     if (!entry)
     {
         ZSet* z = new ZSet();
-        z->insert(member, score);
-        entry = new Entry(key, z);
+        z->insert(std::string(member), score);
+        entry = new Entry(std::string(key), z);
         _map.insert(&entry->hashNode);
         _size++;
         return true;
     }
 
-    return entry->zset->insert(member, score);
+    return entry->zset->insert(std::string(member), score);
 }
 
-bool Database::zrem(const std::string& key, const std::string& member)
+bool Database::zrem(std::string_view key, std::string_view member)
 {
     Entry* entry = findEntry(key, EntryType::ZSET);
     if (!entry)
@@ -299,7 +303,7 @@ bool Database::zrem(const std::string& key, const std::string& member)
     if (!znode)
         return false;
 
-    entry->zset->remove(znode);
+    entry->zset->remove(znode); // Fixed: using remove instead of removeUnsafe
     if (entry->zset->size() == 0)
     {
         removeEntry(entry);
@@ -307,13 +311,13 @@ bool Database::zrem(const std::string& key, const std::string& member)
     return true;
 }
 
-int64_t Database::zcard(const std::string& key)
+int64_t Database::zcard(std::string_view key)
 {
     Entry* entry = findEntry(key, EntryType::ZSET);
     return entry ? static_cast<int64_t>(entry->zset->size()) : 0;
 }
 
-std::optional<double> Database::zscore(const std::string& key, const std::string& member)
+std::optional<double> Database::zscore(std::string_view key, std::string_view member)
 {
     Entry* entry = findEntry(key, EntryType::ZSET);
     if (!entry)
@@ -323,7 +327,19 @@ std::optional<double> Database::zscore(const std::string& key, const std::string
     return znode ? std::optional<double>(znode->score) : std::nullopt;
 }
 
-std::vector<Database::ZRangeResult> Database::zrange(const std::string& key, int64_t start, int64_t stop)
+std::optional<int64_t> Database::zrank(std::string_view key, std::string_view member)
+{
+    Entry* entry = findEntry(key, EntryType::ZSET);
+    if (!entry)
+        return std::nullopt;
+
+    int64_t rank = entry->zset->getRank(member);
+    if (rank < 0)
+        return std::nullopt;
+    return rank;
+}
+
+std::vector<Database::ZRangeResult> Database::zrange(std::string_view key, int64_t start, int64_t stop)
 {
     Entry* entry = findEntry(key, EntryType::ZSET);
     if (!entry)
@@ -353,7 +369,7 @@ std::vector<Database::ZRangeResult> Database::zrange(const std::string& key, int
     return result;
 }
 
-std::vector<Database::ZRangeResult> Database::zrangebyscore(const std::string& key, double min, double max)
+std::vector<Database::ZRangeResult> Database::zrangebyscore(std::string_view key, double min, double max)
 {
     Entry* entry = findEntry(key, EntryType::ZSET);
     if (!entry)
@@ -371,153 +387,237 @@ std::vector<Database::ZRangeResult> Database::zrangebyscore(const std::string& k
 
 // --- Hash Commands ---
 
-int Database::hset(const std::string& key, const std::string& field, const std::string& value)
+int Database::hset(std::string_view key, std::string_view field, std::string_view value)
 {
     Entry* entry = findEntryRaw(key);
+    if (entry && entry->isExpired())
+    {
+        removeEntry(entry);
+        entry = nullptr;
+    }
+
     if (entry && entry->type != EntryType::HASH)
         return -1; // WRONGTYPE
 
     if (!entry)
     {
-        entry = new Entry(key, new HashMap());
+        HashMap* h = new HashMap();
+        HEntry* he = new HEntry();
+        he->key = std::string(field);
+        he->value = std::string(value);
+        he->node.code = str_hash(he->key);
+        h->insert(&he->node);
+
+        entry = new Entry(std::string(key), h);
         _map.insert(&entry->hashNode);
         _size++;
+        return 1;
     }
 
-    HEntry keyEntry;
-    keyEntry.key = field;
-    keyEntry.node.code = str_hash(field);
+    // Check if field exists
+    HEntry searchHe;
+    searchHe.key = std::string(field); // Temporary string for hash and comparison
+    searchHe.node.code = str_hash(searchHe.key);
+    HNode* found = entry->hash->lookup(&searchHe.node, [](HNode* a, HNode* b)
+                                       { return HEntry::fromHash(a)->key == HEntry::fromHash(b)->key; });
 
-    HNode* node = entry->hash->lookup(&keyEntry.node, [&](HNode* existing, HNode* k)
-                                      { return HEntry::fromHash(existing)->key == field; });
-
-    if (node)
+    if (found)
     {
-        HEntry* existing = HEntry::fromHash(node);
-        existing->value = value;
-        return 0; // Updated
+        HEntry::fromHash(found)->value = std::string(value);
+        return 0;
     }
-    else
-    {
-        HEntry* newEntry = new HEntry();
-        newEntry->key = field;
-        newEntry->value = value;
-        newEntry->node.code = str_hash(field);
-        newEntry->node.next = nullptr;
-        entry->hash->insert(&newEntry->node);
-        return 1; // New
-    }
+
+    HEntry* he = new HEntry();
+    he->key = std::string(field);
+    he->value = std::string(value);
+    he->node.code = str_hash(he->key);
+    entry->hash->insert(&he->node);
+    return 1;
 }
 
-std::optional<std::string_view> Database::hget(const std::string& key, const std::string& field)
+std::optional<std::string_view> Database::hget(std::string_view key, std::string_view field)
 {
     Entry* entry = findEntry(key, EntryType::HASH);
     if (!entry)
         return std::nullopt;
 
-    HEntry keyEntry;
-    keyEntry.key = field;
-    keyEntry.node.code = str_hash(field);
+    HEntry searchHe;
+    searchHe.key = std::string(field); // Temporary string for hash and comparison
+    searchHe.node.code = str_hash(searchHe.key);
+    HNode* found = entry->hash->lookup(&searchHe.node, [](HNode* a, HNode* b)
+                                       { return HEntry::fromHash(a)->key == HEntry::fromHash(b)->key; });
 
-    HNode* node = entry->hash->lookup(&keyEntry.node, [&](HNode* existing, HNode* k)
-                                      { return HEntry::fromHash(existing)->key == field; });
-
-    if (node)
-        return HEntry::fromHash(node)->value;
-    return std::nullopt;
+    if (!found)
+        return std::nullopt;
+    return std::string_view(HEntry::fromHash(found)->value);
 }
 
-int Database::hdel(const std::string& key, const std::string& field)
+int Database::hdel(std::string_view key, std::string_view field)
 {
     Entry* entry = findEntry(key, EntryType::HASH);
     if (!entry)
-        return 0; // Key not found or WRONGTYPE (handled by findEntry returning null for WRONGTYPE?)
-                  // Wait, findEntry returns null for WRONGTYPE only if I requested expected type.
-                  // I requested EntryType::HASH. So if it's ZSET, it returns null.
-                  // But standard Redis HDEL returns 0 if key doesn't exist AND should return error if WRONGTYPE.
-                  // My findEntry swallows WRONGTYPE into null.
-                  // I should check WRONGTYPE explicitly if I want strict return codes.
-
-    // Let's check explicitly for WRONGTYPE compliance
-    Entry* raw = findEntryRaw(key);
-    if (raw && raw->type != EntryType::HASH)
-        return -1; // WRONGTYPE
-
-    if (!raw)
-        return 0; // Key doesn't exist
-
-    HEntry keyEntry;
-    keyEntry.key = field;
-    keyEntry.node.code = str_hash(field);
-
-    HNode* node = raw->hash->remove(&keyEntry.node, [&](HNode* existing, HNode* k)
-                                    { return HEntry::fromHash(existing)->key == field; });
-
-    if (node)
-    {
-        delete HEntry::fromHash(node);
-        if (raw->hash->newer().size() == 0 && raw->hash->older().size() == 0) // crude empty check
-        {
-            // If empty, remove the key? Redis does this.
-            // Helper specific to Database::removeEntry(raw);
-            removeEntry(raw);
-        }
-        return 1;
-    }
-    return 0;
-}
-
-int64_t Database::hlen(const std::string& key)
-{
-    // Again, findEntry swallows WRONGTYPE.
-    Entry* raw = findEntryRaw(key);
-    if (raw && raw->type != EntryType::HASH)
-        return -1; // Error indicator? Or 0? Redis HLEN returns 0 for non-existent. Returns error for WRONGTYPE.
-                   // I'll return -1 because int64_t allows it. Client should handle it.
-
-    if (!raw)
         return 0;
 
-    // Hash size is sum of both tables
-    return raw->hash->newer().size() + raw->hash->older().size();
+    HEntry searchHe;
+    searchHe.key = std::string(field); // Temporary string for hash and comparison
+    searchHe.node.code = str_hash(searchHe.key);
+    HNode* found = entry->hash->remove(&searchHe.node, [](HNode* a, HNode* b)
+                                       { return HEntry::fromHash(a)->key == HEntry::fromHash(b)->key; });
+
+    if (!found)
+        return 0;
+
+    delete HEntry::fromHash(found);
+    if (entry->hash->newer().size() == 0 && entry->hash->older().size() == 0)
+    {
+        removeEntry(entry);
+    }
+    return 1;
 }
 
-std::vector<Database::HGetAllResult> Database::hgetall(const std::string& key)
+int64_t Database::hlen(std::string_view key)
 {
-    Entry* raw = findEntryRaw(key);
-    if (raw && raw->type != EntryType::HASH)
-        return {}; // WRONGTYPE -> empty list? Redis returns error. Client should check getType?
-                   // No, I should return valid data or empty.
-                   // Ideally client checks type before calling or I throw/return error.
-                   // For now, returning empty is "safe" but hides errors.
-                   // But wait, findEntry(key, HASH) returns null on wrong type.
-                   // So I can't distinguish "missing" from "wrong type" easily with findEntry(type).
+    Entry* entry = findEntry(key, EntryType::HASH);
+    if (!entry)
+        return 0;
+    return static_cast<int64_t>(entry->hash->newer().size() + entry->hash->older().size());
+}
 
-    if (!raw || raw->type != EntryType::HASH)
+std::vector<Database::HGetAllResult> Database::hgetall(std::string_view key)
+{
+    Entry* entry = findEntry(key, EntryType::HASH);
+    if (!entry)
         return {};
 
     std::vector<HGetAllResult> result;
-
-    auto collect = [&](const HashTable& ht)
+    auto& newer = entry->hash->newer();
+    HT_FOREACH(newer, node)
     {
-        for (size_t i = 0; !ht.empty() && i <= ht.mask(); ++i)
-        {
-            HNode* node = ht.bucketAt(i);
-            while (node)
-            {
-                HEntry* he = HEntry::fromHash(node);
-                result.push_back({he->key, he->value});
-                node = node->next;
-            }
-        }
-    };
-
-    collect(raw->hash->newer());
-    collect(raw->hash->older());
+        HEntry* he = HEntry::fromHash(node);
+        result.push_back({he->key, he->value});
+    }
+    auto& older = entry->hash->older();
+    HT_FOREACH(older, node)
+    {
+        HEntry* he = HEntry::fromHash(node);
+        result.push_back({he->key, he->value});
+    }
     return result;
 }
 
-bool Database::del(const std::string& key)
+// --- List Commands ---
+
+int64_t Database::lpush(std::string_view key, std::string_view value)
+{
+    Entry* entry = findEntryRaw(key);
+    if (entry && entry->isExpired())
+    {
+        removeEntry(entry);
+        entry = nullptr;
+    }
+
+    if (entry && entry->type != EntryType::LIST)
+        return -1; // WRONGTYPE
+
+    if (!entry)
+    {
+        std::deque<std::string>* l = new std::deque<std::string>();
+        l->push_front(std::string(value));
+        entry = new Entry(std::string(key), l);
+        _map.insert(&entry->hashNode);
+        _size++;
+        return 1;
+    }
+
+    entry->list->push_front(std::string(value));
+    return static_cast<int64_t>(entry->list->size());
+}
+
+int64_t Database::rpush(std::string_view key, std::string_view value)
+{
+    Entry* entry = findEntryRaw(key);
+    if (entry && entry->isExpired())
+    {
+        removeEntry(entry);
+        entry = nullptr;
+    }
+
+    if (entry && entry->type != EntryType::LIST)
+        return -1; // WRONGTYPE
+
+    if (!entry)
+    {
+        std::deque<std::string>* l = new std::deque<std::string>();
+        l->push_back(std::string(value));
+        entry = new Entry(std::string(key), l);
+        _map.insert(&entry->hashNode);
+        _size++;
+        return 1;
+    }
+
+    entry->list->push_back(std::string(value));
+    return static_cast<int64_t>(entry->list->size());
+}
+
+std::optional<std::string> Database::lpop(std::string_view key)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry || entry->list->empty())
+        return std::nullopt;
+
+    std::string val = std::move(entry->list->front());
+    entry->list->pop_front();
+    if (entry->list->empty())
+        removeEntry(entry);
+    return val;
+}
+
+std::optional<std::string> Database::rpop(std::string_view key)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry || entry->list->empty())
+        return std::nullopt;
+
+    std::string val = std::move(entry->list->back());
+    entry->list->pop_back();
+    if (entry->list->empty())
+        removeEntry(entry);
+    return val;
+}
+
+int64_t Database::llen(std::string_view key)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    return entry ? static_cast<int64_t>(entry->list->size()) : 0;
+}
+
+std::vector<std::string> Database::lrange(std::string_view key, int64_t start, int64_t stop)
+{
+    Entry* entry = findEntry(key, EntryType::LIST);
+    if (!entry)
+        return {};
+
+    int64_t n = static_cast<int64_t>(entry->list->size());
+    if (start < 0)
+        start += n;
+    if (stop < 0)
+        stop += n;
+    if (start < 0)
+        start = 0;
+    if (stop >= n)
+        stop = n - 1;
+    if (start > stop || start >= n)
+        return {};
+
+    std::vector<std::string> result;
+    for (int64_t i = start; i <= stop; i++)
+    {
+        result.push_back((*entry->list)[i]);
+    }
+    return result;
+}
+
+bool Database::del(std::string_view key)
 {
     Entry* entry = findEntryRaw(key); // delete even if expired
     if (!entry)
@@ -527,7 +627,7 @@ bool Database::del(const std::string& key)
     return true;
 }
 
-bool Database::expire(const std::string& key, int64_t ttlMs)
+bool Database::expire(std::string_view key, int64_t ttlMs)
 {
     Entry* entry = findEntry(key);
     if (!entry)
@@ -537,7 +637,7 @@ bool Database::expire(const std::string& key, int64_t ttlMs)
     return true;
 }
 
-bool Database::persist(const std::string& key)
+bool Database::persist(std::string_view key)
 {
     Entry* entry = findEntry(key);
     if (!entry || !entry->hasExpiry())
@@ -547,7 +647,7 @@ bool Database::persist(const std::string& key)
     return true;
 }
 
-int64_t Database::pttl(const std::string& key)
+int64_t Database::pttl(std::string_view key)
 {
     Entry* entry = findEntryRaw(key);
     if (!entry || entry->isExpired())
@@ -560,20 +660,10 @@ int64_t Database::pttl(const std::string& key)
     return remaining > 0 ? remaining : 0;
 }
 
-bool Database::exists(const std::string& key)
+bool Database::exists(std::string_view key)
 {
     return findEntry(key) != nullptr;
 }
-
-EntryType Database::getType(const std::string& key)
-{
-    Entry* entry = findEntry(key);
-    if (!entry)
-        return EntryType::STRING; // Default for non-existent in my current logic, but TYPE command will handle it
-                                  // correctly via exists() check
-    return entry->type;
-}
-
 // Simple glob matching: supports "*", "prefix*", "*suffix", "pre*suf"
 static bool matchPattern(const std::string& pattern, const std::string& str)
 {
@@ -596,27 +686,28 @@ static bool matchPattern(const std::string& pattern, const std::string& str)
     return true;
 }
 
-std::vector<std::string> Database::keys(const std::string& pattern)
+std::vector<std::string> Database::keys(std::string_view pattern)
 {
     std::vector<std::string> result;
+    std::string patternStr(pattern);
 
     HT_FOREACH(_map.newer(), node)
     {
         Entry* entry = Entry::fromHash(node);
-        if (!entry->isExpired() && matchPattern(pattern, entry->key))
+        if (!entry->isExpired() && matchPattern(patternStr, entry->key))
             result.push_back(entry->key);
     }
     HT_FOREACH(_map.older(), node)
     {
         Entry* entry = Entry::fromHash(node);
-        if (!entry->isExpired() && matchPattern(pattern, entry->key))
+        if (!entry->isExpired() && matchPattern(patternStr, entry->key))
             result.push_back(entry->key);
     }
 
     return result;
 }
 
-bool Database::rename(const std::string& key, const std::string& newkey)
+bool Database::rename(std::string_view key, std::string_view newkey)
 {
     Entry* entry = findEntry(key);
     if (!entry)
@@ -632,15 +723,15 @@ bool Database::rename(const std::string& key, const std::string& newkey)
         return false;
 
     Entry* e = Entry::fromHash(removed);
-    e->key = newkey;
-    e->hashNode.code = str_hash(newkey);
+    e->key = std::string(newkey);
+    e->hashNode.code = str_hash(e->key);
     e->hashNode.next = nullptr;
     _map.insert(&e->hashNode);
     // _size stays the same (or decremented by del(newkey) above)
     return true;
 }
 
-Entry::Entry(const std::string& k, std::deque<std::string>* l) : key(k), type(EntryType::LIST), list(l)
+Entry::Entry(std::string k, std::deque<std::string>* l) : key(std::move(k)), type(EntryType::LIST), list(l)
 {
     hashNode.next = nullptr;
     hashNode.code = str_hash(key);
@@ -649,122 +740,7 @@ Entry::Entry(const std::string& k, std::deque<std::string>* l) : key(k), type(En
 // NOTE: Destructor logic for LIST is added via replace_file_content in the next step to inject into existing
 // destructor.
 
-// --- List Commands ---
-
-int64_t Database::lpush(const std::string& key, const std::string& value)
-{
-    Entry* entry = findEntryRaw(key);
-    if (entry && entry->type != EntryType::LIST)
-        return -1; // Wrong type
-
-    if (!entry)
-    {
-        auto list = new std::deque<std::string>();
-        entry = new Entry(key, list);
-        _map.insert(&entry->hashNode);
-        _size++;
-    }
-
-    entry->list->push_front(value);
-    return entry->list->size();
-}
-
-int64_t Database::rpush(const std::string& key, const std::string& value)
-{
-    Entry* entry = findEntryRaw(key);
-    if (entry && entry->type != EntryType::LIST)
-        return -1;
-
-    if (!entry)
-    {
-        auto list = new std::deque<std::string>();
-        entry = new Entry(key, list);
-        _map.insert(&entry->hashNode);
-        _size++;
-    }
-
-    entry->list->push_back(value);
-    return entry->list->size();
-}
-
-std::optional<std::string> Database::lpop(const std::string& key)
-{
-    Entry* entry = findEntry(key, EntryType::LIST);
-    if (!entry || entry->list->empty())
-        return std::nullopt;
-
-    std::string val = entry->list->front();
-    entry->list->pop_front();
-
-    if (entry->list->empty())
-    {
-        removeEntry(entry);
-    }
-
-    return val;
-}
-
-std::optional<std::string> Database::rpop(const std::string& key)
-{
-    Entry* entry = findEntry(key, EntryType::LIST);
-    if (!entry || entry->list->empty())
-        return std::nullopt;
-
-    std::string val = entry->list->back();
-    entry->list->pop_back();
-
-    if (entry->list->empty())
-    {
-        removeEntry(entry);
-    }
-
-    return val;
-}
-
-int64_t Database::llen(const std::string& key)
-{
-    Entry* entry = findEntry(key, EntryType::LIST);
-    if (!entry)
-        return 0;
-    return entry->list->size();
-}
-
-std::vector<std::string> Database::lrange(const std::string& key, int64_t start, int64_t stop)
-{
-    Entry* entry = findEntry(key, EntryType::LIST);
-    if (!entry)
-        return {};
-
-    int64_t size = entry->list->size();
-
-    // Normalize indices
-    if (start < 0)
-        start = size + start;
-    if (stop < 0)
-        stop = size + stop;
-
-    if (start < 0)
-        start = 0;
-
-    // In Redis, stop is inclusive. If stop is beyond size, limit it.
-    if (stop >= size)
-        stop = size - 1;
-
-    if (start > stop || start >= size)
-        return {};
-
-    std::vector<std::string> result;
-    result.reserve(stop - start + 1);
-
-    for (int64_t i = start; i <= stop; ++i)
-    {
-        result.push_back(entry->list->at(i));
-    }
-
-    return result;
-}
-
-Entry::Entry(const std::string& k, std::unordered_set<std::string>* s) : key(k), type(EntryType::SET), set(s)
+Entry::Entry(std::string k, std::unordered_set<std::string>* s) : key(std::move(k)), type(EntryType::SET), set(s)
 {
     hashNode.next = nullptr;
     hashNode.code = str_hash(key);
@@ -774,67 +750,123 @@ Entry::Entry(const std::string& k, std::unordered_set<std::string>* s) : key(k),
 
 // --- Set Commands ---
 
-int Database::sadd(const std::string& key, const std::string& member)
+int Database::sadd(std::string_view key, std::string_view member)
 {
     Entry* entry = findEntryRaw(key);
+    if (entry && entry->isExpired())
+    {
+        removeEntry(entry);
+        entry = nullptr;
+    }
+
     if (entry && entry->type != EntryType::SET)
-        return -1; // Wrong type
+        return -1; // WRONGTYPE
 
     if (!entry)
     {
-        auto s = new std::unordered_set<std::string>();
-        entry = new Entry(key, s);
+        std::unordered_set<std::string>* s = new std::unordered_set<std::string>();
+        s->insert(std::string(member));
+        entry = new Entry(std::string(key), s);
         _map.insert(&entry->hashNode);
         _size++;
+        return 1;
     }
 
-    auto result = entry->set->insert(member);
-    return result.second ? 1 : 0;
+    auto res = entry->set->insert(std::string(member));
+    return res.second ? 1 : 0;
 }
 
-int Database::srem(const std::string& key, const std::string& member)
+int Database::srem(std::string_view key, std::string_view member)
 {
     Entry* entry = findEntry(key, EntryType::SET);
     if (!entry)
         return 0;
 
-    size_t removed = entry->set->erase(member);
+    auto it = entry->set->find(std::string(member));
+    if (it == entry->set->end())
+        return 0;
+
+    entry->set->erase(it);
     if (entry->set->empty())
     {
         removeEntry(entry);
     }
-    return static_cast<int>(removed);
+    return 1;
 }
 
-int Database::sismember(const std::string& key, const std::string& member)
+int Database::sismember(std::string_view key, std::string_view member)
 {
     Entry* entry = findEntry(key, EntryType::SET);
     if (!entry)
         return 0;
-
-    return entry->set->count(member) > 0 ? 1 : 0;
+    return entry->set->count(std::string(member)) ? 1 : 0;
 }
 
-std::vector<std::string> Database::smembers(const std::string& key)
+std::vector<std::string> Database::smembers(std::string_view key)
 {
     Entry* entry = findEntry(key, EntryType::SET);
     if (!entry)
         return {};
 
-    std::vector<std::string> members;
-    members.reserve(entry->set->size());
-    for (const auto& m : *entry->set)
+    std::vector<std::string> result;
+    for (const auto& member : *entry->set)
     {
-        members.push_back(m);
+        result.push_back(member);
     }
-    return members;
+    return result;
 }
 
-int64_t Database::scard(const std::string& key)
+int64_t Database::scard(std::string_view key)
 {
     Entry* entry = findEntry(key, EntryType::SET);
-    if (!entry)
-        return 0;
+    return entry ? static_cast<int64_t>(entry->set->size()) : 0;
+}
 
-    return entry->set->size();
+void Database::accept(IDataVisitor& visitor)
+{
+    auto visitTable = [&](const HashTable& ht)
+    {
+        for (size_t i = 0; !ht.empty() && i <= ht.mask(); ++i)
+        {
+            HNode* node = ht.bucketAt(i);
+            while (node)
+            {
+                Entry* entry = Entry::fromHash(node);
+                if (entry->isExpired())
+                {
+                    node = node->next;
+                    continue;
+                }
+
+                switch (entry->type)
+                {
+                case EntryType::STRING:
+                    visitor.onString(entry->key, entry->value, entry->expiresAt);
+                    break;
+                case EntryType::LIST:
+                    if (entry->list)
+                        visitor.onList(entry->key, *entry->list, entry->expiresAt);
+                    break;
+                case EntryType::SET:
+                    if (entry->set)
+                        visitor.onSet(entry->key, *entry->set, entry->expiresAt);
+                    break;
+                case EntryType::HASH:
+                    if (entry->hash)
+                        visitor.onHash(entry->key, *entry->hash, entry->expiresAt);
+                    break;
+                case EntryType::ZSET:
+                    if (entry->zset)
+                        visitor.onZSet(entry->key, *entry->zset, entry->expiresAt);
+                    break;
+                default:
+                    break;
+                }
+                node = node->next;
+            }
+        }
+    };
+
+    visitTable(_map.newer());
+    visitTable(_map.older());
 }

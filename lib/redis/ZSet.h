@@ -13,10 +13,10 @@ struct ZNode
     double score = 0;
     std::string name;
 
-    ZNode(const std::string& name, double score);
+    ZNode(std::string name, double score);
 
     static bool less(AVLNode* ln, AVLNode* rn);
-    static bool less(AVLNode* ln, double score, const std::string& name);
+    static bool less(AVLNode* ln, double score, std::string_view name);
     static ZNode* fromTree(AVLNode* treeNode);
     static ZNode* fromHash(HNode* hashNode);
     static ZNode* offset(ZNode* node, int64_t offset);
@@ -28,12 +28,13 @@ public:
     ZSet() = default;
     ~ZSet();
 
-    ZNode* lookUp(const std::string& name);
-    bool insert(const std::string& name, double score);
+    ZNode* lookUp(std::string_view name);
+    bool insert(std::string name, double score);
     void update(ZNode* node, double score);
     void remove(ZNode* node);
 
-    ZNode* seekGe(double score, const std::string& name);
+    ZNode* seekGe(double score, std::string_view name);
+    int64_t getRank(std::string_view name);
 
     size_t size() const
     {
@@ -58,7 +59,7 @@ namespace ZSET
     struct HKey
     {
         HNode hashNode;
-        std::string name;
+        std::string_view name;
 
         static bool cmp(HNode* a, HNode* b);
     };

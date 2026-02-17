@@ -6,6 +6,12 @@ void AVLNode::init()
 {
     parent = left = right = nullptr;
     height = 1;
+    cnt = 1;
+}
+
+uint32_t AVLNode::getSize(const AVLNode* node)
+{
+    return node ? node->cnt : 0;
 }
 
 uint32_t AVLNode::getHeight(const AVLNode* node)
@@ -13,9 +19,10 @@ uint32_t AVLNode::getHeight(const AVLNode* node)
     return node ? node->height : 0;
 }
 
-void AVLNode::updateHeight(AVLNode* node)
+void AVLNode::updateStats(AVLNode* node)
 {
     node->height = 1 + std::max(getHeight(node->left), getHeight(node->right));
+    node->cnt = 1 + getSize(node->left) + getSize(node->right);
 }
 
 AVLNode* AVLNode::rotateLeft(AVLNode* node)
@@ -32,8 +39,8 @@ AVLNode* AVLNode::rotateLeft(AVLNode* node)
     newRoot->left = node;
     node->parent = newRoot;
 
-    updateHeight(node);
-    updateHeight(newRoot);
+    updateStats(node);
+    updateStats(newRoot);
     return newRoot;
 }
 
@@ -51,8 +58,8 @@ AVLNode* AVLNode::rotateRight(AVLNode* node)
     newRoot->right = node;
     node->parent = newRoot;
 
-    updateHeight(node);
-    updateHeight(newRoot);
+    updateStats(node);
+    updateStats(newRoot);
     return newRoot;
 }
 
@@ -79,7 +86,7 @@ AVLNode* AVLNode::balance(AVLNode* node)
         if (par)
             from = (par->left == node) ? &par->left : &par->right;
 
-        updateHeight(node);
+        updateStats(node);
 
         uint32_t lh = getHeight(node->left);
         uint32_t rh = getHeight(node->right);
@@ -214,7 +221,8 @@ void AVLTree::insert(AVLNode* node, const AVLLess& less)
     *from = node;
     node->parent = parent;
 
-    _root = AVLNode::balance(_root);
+    // Balance and maintain size from the inserted node to the root
+    _root = AVLNode::balance(node);
 }
 
 AVLNode* AVLTree::remove(const AVLCmp& cmp, void* key)
@@ -233,4 +241,22 @@ AVLNode* AVLTree::remove(const AVLCmp& cmp, void* key)
         }
     }
     return nullptr;
+}
+
+uint32_t AVLNode::getRank(AVLNode* node)
+{
+    if (!node)
+        return 0;
+
+    uint32_t rank = getSize(node->left);
+    AVLNode* cur = node;
+    while (cur->parent)
+    {
+        if (cur == cur->parent->right)
+        {
+            rank += getSize(cur->parent->left) + 1;
+        }
+        cur = cur->parent;
+    }
+    return rank;
 }

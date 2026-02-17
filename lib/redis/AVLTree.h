@@ -9,11 +9,13 @@ struct AVLNode
     AVLNode* left = nullptr;
     AVLNode* right = nullptr;
     uint32_t height = 0;
+    uint32_t cnt = 0; // Subtree size
 
     void init();
 
     static uint32_t getHeight(const AVLNode* node);
-    static void updateHeight(AVLNode* node);
+    static uint32_t getSize(const AVLNode* node);
+    static void updateStats(AVLNode* node);
 
     static AVLNode* rotateLeft(AVLNode* node);
     static AVLNode* rotateRight(AVLNode* node);
@@ -29,6 +31,7 @@ struct AVLNode
     static AVLNode* successor(AVLNode* node);
     static AVLNode* predecessor(AVLNode* node);
     static AVLNode* offset(AVLNode* node, int64_t offset);
+    static uint32_t getRank(AVLNode* node);
 };
 
 // Comparator types

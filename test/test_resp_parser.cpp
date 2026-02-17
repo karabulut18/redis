@@ -55,70 +55,78 @@ void test_encode_null()
 void test_decode_simple_string()
 {
     std::cout << "RespParser: decode simple string... ";
-    RespParser parser;
+    std::string input = "+OK\r\n";
     RespValue result;
     size_t bytesRead = 0;
-
-    std::string input = "+PONG\r\n";
-    RespStatus status = parser.decode(input.c_str(), input.size(), result, bytesRead);
+    RespParser parser;
+    RespStatus status = parser.decode(input.c_str(), input.length(), result, bytesRead);
 
     assert(status == RespStatus::Ok);
     assert(result.type == RespType::SimpleString);
-    assert(result.getString() == "PONG");
-    assert(bytesRead == input.size());
+    assert(result.toString() == "OK");
+    assert(bytesRead == input.length());
+    std::cout << "PASS\n";
+}
+
+void test_decode_error()
+{
+    std::cout << "RespParser: decode error... ";
+    std::string input = "-Error message\r\n";
+    RespValue result;
+    size_t bytesRead = 0;
+    RespParser parser;
+    RespStatus status = parser.decode(input.c_str(), input.length(), result, bytesRead);
+
+    assert(status == RespStatus::Ok);
+    assert(result.type == RespType::Error);
+    assert(result.toString() == "Error message");
     std::cout << "PASS\n";
 }
 
 void test_decode_integer()
 {
     std::cout << "RespParser: decode integer... ";
-    RespParser parser;
+    std::string input = ":1000\r\n";
     RespValue result;
     size_t bytesRead = 0;
-
-    std::string input = ":1000\r\n";
-    RespStatus status = parser.decode(input.c_str(), input.size(), result, bytesRead);
+    RespParser parser;
+    RespStatus status = parser.decode(input.c_str(), input.length(), result, bytesRead);
 
     assert(status == RespStatus::Ok);
     assert(result.type == RespType::Integer);
-    assert(result.getInt() == 1000);
+    assert(std::get<int64_t>(result.value) == 1000);
     std::cout << "PASS\n";
 }
 
 void test_decode_bulk_string()
 {
     std::cout << "RespParser: decode bulk string... ";
-    RespParser parser;
+    std::string input = "$6\r\nfoobar\r\n";
     RespValue result;
     size_t bytesRead = 0;
-
-    std::string input = "$5\r\nhello\r\n";
-    RespStatus status = parser.decode(input.c_str(), input.size(), result, bytesRead);
+    RespParser parser;
+    RespStatus status = parser.decode(input.c_str(), input.length(), result, bytesRead);
 
     assert(status == RespStatus::Ok);
     assert(result.type == RespType::BulkString);
-    assert(result.getString() == "hello");
+    assert(result.toString() == "foobar");
     std::cout << "PASS\n";
 }
 
 void test_decode_array()
 {
-    std::cout << "RespParser: decode array (SET command)... ";
-    RespParser parser;
+    std::cout << "RespParser: decode array... ";
+    std::string input = "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
     RespValue result;
     size_t bytesRead = 0;
-
-    // *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
-    std::string input = "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n";
-    RespStatus status = parser.decode(input.c_str(), input.size(), result, bytesRead);
+    RespParser parser;
+    RespStatus status = parser.decode(input.c_str(), input.length(), result, bytesRead);
 
     assert(status == RespStatus::Ok);
     assert(result.type == RespType::Array);
-    auto& arr = result.getArray();
-    assert(arr.size() == 3);
-    assert(arr[0].getString() == "SET");
-    assert(arr[1].getString() == "key");
-    assert(arr[2].getString() == "value");
+    assert(result.getArray().size() == 2);
+    assert(result.getArray()[0].toString() == "foo");
+    assert(result.getArray()[1].toString() == "bar");
     std::cout << "PASS\n";
 }
 
@@ -148,13 +156,13 @@ void test_decode_negative_integer()
 
     assert(status == RespStatus::Ok);
     assert(result.type == RespType::Integer);
-    assert(result.getInt() == -2);
+    assert(std::get<int64_t>(result.value) == -2);
     std::cout << "PASS\n";
 }
 
 void test_roundtrip()
 {
-    std::cout << "RespParser: encode→decode roundtrip... ";
+    std::cout << "RespParser: encode->decode roundtrip... ";
     RespParser parser;
 
     // Build an array: ["PING"]
@@ -165,7 +173,7 @@ void test_roundtrip()
     elem.type = RespType::BulkString;
     elem.value = std::string_view("PING");
     arr.push_back(elem);
-    cmd.value = arr;
+    cmd.setArray(std::move(arr));
 
     std::string encoded = RespParser::encode(cmd);
 
@@ -177,7 +185,30 @@ void test_roundtrip()
     assert(status == RespStatus::Ok);
     assert(decoded.type == RespType::Array);
     assert(decoded.getArray().size() == 1);
-    assert(decoded.getArray()[0].getString() == "PING");
+    assert(decoded.getArray()[0].toString() == "PING");
+    std::cout << "PASS\n";
+}
+
+void test_zero_copy_anchor()
+{
+    std::cout << "RespParser: zero-copy anchor verification... ";
+    SegmentedBuffer buffer;
+    std::string input = "$6\r\nfoobar\r\n";
+    buffer.append(input.data(), input.size());
+
+    RespValue result;
+    size_t bytesRead = 0;
+    RespParser parser;
+
+    // Parse using SegmentedBuffer to get the anchor
+    RespStatus status = parser.decode(buffer, result, bytesRead);
+    assert(status == RespStatus::Ok);
+    assert(result.type == RespType::BulkString);
+    assert(result.toString() == "foobar");
+
+    // The result MUST hold an anchor to the buffer's segment
+    assert(result.anchor != nullptr);
+
     std::cout << "PASS\n";
 }
 
@@ -190,12 +221,14 @@ int main()
     test_encode_bulk_string();
     test_encode_null();
     test_decode_simple_string();
+    test_decode_error();
     test_decode_integer();
     test_decode_bulk_string();
     test_decode_array();
     test_decode_incomplete();
     test_decode_negative_integer();
     test_roundtrip();
+    test_zero_copy_anchor();
     std::cout << "All RespParser tests passed!\n";
     return 0;
 }

@@ -93,63 +93,64 @@ bool TcpConnection::closeRequested()
 
 void TcpConnection::handleWrite()
 {
-    if (_outgoing.size() == 0)
+    if (_outgoing.empty())
     {
         _connWrite = false;
         return;
     }
 
-    const char* outgoing = _outgoing.data();
-    size_t totalToSend = _outgoing.size();
-    size_t sendSize = 0;
-    bool errorInWrite = false;
+    // Get a contiguous view of the outgoing data.
+    // If it spans segments, we'll send it in chunks across multiple calls or use writev.
+    // Simplifying for now: send what's contiguous.
+    std::string_view outgoing = _outgoing.peek();
+    ssize_t bytesWritten = write(_socketfd, outgoing.data(), outgoing.size());
 
-    while (totalToSend > sendSize)
+    if (bytesWritten < 0)
     {
-        ssize_t bytesWritten = write(_socketfd, outgoing + sendSize, totalToSend - sendSize);
-        if (bytesWritten < 0)
-        {
-            if (errno != EAGAIN && errno != EWOULDBLOCK)
-                _connClose = true;
-            errorInWrite = true;
-            break;
-        }
-        else
-            sendSize += bytesWritten;
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            _connClose = true;
+    }
+    else if (bytesWritten > 0)
+    {
+        _outgoing.consume(bytesWritten);
     }
 
-    if (sendSize > 0)
-        _outgoing.consume(sendSize);
-
-    if (_outgoing.size() == 0 && !errorInWrite)
+    if (_outgoing.empty())
         _connWrite = false;
 }
 
 void TcpConnection::handleRead()
 {
-    ssize_t rv = read(_socketfd, _buffer, sizeof(_buffer));
+    // ZERO-COPY HOOK: Get a direct pointer to the memory segment
+    // We hint with TCP_MAX_MESSAGE_SIZE to suggest a good segment size
+    size_t writableSize = 0;
+    void* writePtr = _incoming.getWritePtr(TCP_MAX_MESSAGE_SIZE, writableSize);
+
+    ssize_t rv = read(_socketfd, writePtr, writableSize);
     if (rv <= 0)
     {
+        if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
         _connClose = true;
         return;
     }
 
-    _incoming.append(_buffer, (size_t)rv);
+    // Commit the data back to the segmented buffer
+    _incoming.commitWrite(rv);
 
-    while (_incoming.size() > 0)
+    while (!_incoming.empty())
     {
-        size_t available = _incoming.size();
-        const char* data = _incoming.data();
-
-        size_t consumed = _owner->OnMessageReceive(data, available);
+        // Try to process as much as we can.
+        // We peek as far as we can to avoid unnecessary cross-segment copies in the parser.
+        std::string_view data = _incoming.peekContiguous(_incoming.size());
+        size_t consumed = _owner->OnMessageReceive(data.data(), data.size());
 
         if (consumed > 0)
         {
-            _incoming.consume((m_size_t)consumed);
+            _incoming.consume(consumed);
         }
         else
         {
-            // Not enough data for a full message, wait for more
             break;
         }
     }
@@ -219,28 +220,27 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
     if (_state != ClientState::Running)
         return;
 
+    _outgoing.append(buffer, length);
+
     if (_concurencyType == ConcurrencyType::EventBased)
     {
-        _outgoing.append(buffer, length);
         _connWrite = true;
-        // Output::GetInstance()->PutF("TcpConnection::Send: Queued %ld bytes, _connWrite=true\n", length);
-        // Can't access Output easily? It's singleton.
-        // #include "Output.h" is needed in .cpp if not present.
-        // It is not included in TcpConnection.cpp.
-        // I'll add printf for now or include Output.
-        return;
     }
     else
     {
-        ssize_t bytesSent = 0;
-
-        while (bytesSent < length)
+        // Thread-based: try to flush until outgoing is empty or socket blocks
+        while (!_outgoing.empty())
         {
-            ssize_t bytesToWrite = length - bytesSent;
-            ssize_t bytesWritten = write(_socketfd, buffer + bytesSent, bytesToWrite);
-            if (bytesWritten < 0)
+            std::string_view out = _outgoing.peek();
+            ssize_t bytesWritten = write(_socketfd, out.data(), out.size());
+            if (bytesWritten <= 0)
+            {
+                if (bytesWritten < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+                    break;
+                _connClose = true;
                 break;
-            bytesSent += bytesWritten;
+            }
+            _outgoing.consume(bytesWritten);
         }
     }
 };

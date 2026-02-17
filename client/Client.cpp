@@ -33,7 +33,7 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t length)
             const auto& array = val.getArray();
             if (!array.empty() && array[0].type == RespType::BulkString)
             {
-                if (array[0].getString() == "PING")
+                if (array[0].toString() == "PING")
                 {
                     PUTF_LN("Client received PING");
                     std::string reply = "+PONG\r\n";
@@ -48,7 +48,7 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t length)
         }
         else if (val.type == RespType::SimpleString)
         {
-            if (val.getString() == "PING")
+            if (val.toString() == "PING")
             {
                 std::string reply = "+PONG\r\n";
                 Send(reply.c_str(), reply.length());
@@ -121,7 +121,7 @@ void Client::Ping()
     static RespValue val;
     val.type = RespType::SimpleString;
     val.value = std::string_view("PING");
-    std::string encoded = RespParser::encode(val);
+    std::string encoded = _parser->encode(val);
     _connection->Send(encoded.c_str(), encoded.length());
 }
 

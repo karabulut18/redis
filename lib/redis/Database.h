@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HashMap.h"
+#include "IDataVisitor.h"
 #include "ZSet.h"
 #include "str_hash.h"
 #include <chrono>
@@ -15,6 +16,7 @@
 
 enum class EntryType
 {
+    NONE,
     STRING,
     ZSET,
     HASH,
@@ -51,11 +53,11 @@ struct Entry
     std::unordered_set<std::string>* set = nullptr; // For SET
     int64_t expiresAt = -1;                         // millisecond timestamp, -1 = no expiry
 
-    Entry(const std::string& k, const std::string& v);
-    Entry(const std::string& k, ZSet* z);
-    Entry(const std::string& k, HashMap* h);
-    Entry(const std::string& k, std::deque<std::string>* l);
-    Entry(const std::string& k, std::unordered_set<std::string>* s);
+    Entry(std::string k, std::string v);
+    Entry(std::string k, ZSet* z);
+    Entry(std::string k, HashMap* h);
+    Entry(std::string k, std::deque<std::string>* l);
+    Entry(std::string k, std::unordered_set<std::string>* s);
     ~Entry();
 
     bool hasExpiry() const
@@ -73,9 +75,9 @@ struct Entry
 struct LookupKey
 {
     HNode hashNode;
-    std::string key;
+    std::string_view key;
 
-    explicit LookupKey(const std::string& k);
+    explicit LookupKey(std::string_view k);
 
     // Compares an Entry's HNode against a LookupKey's HNode
     static bool cmp(HNode* entryNode, HNode* keyNode);
@@ -95,33 +97,39 @@ public:
     // --- String Commands ---
 
     // SET key value — inserts or overwrites. Returns true if new, false if updated.
-    bool set(const std::string& key, const std::string& value, int64_t ttlMs = -1);
+    bool set(std::string_view key, std::string_view value, int64_t ttlMs = -1);
 
     // GET key — returns pointer to value if found (and not expired), nullptr otherwise.
-    const std::string* get(const std::string& key);
+    const std::string* get(std::string_view key);
 
-    // INCRBY key increment — increments the number stored at key by increment.
-    // Returns the new value. Throws/Returns error if value is not an integer.
-    // Uses int64_t for return value. Returns pair {new_value, success}.
-    // If failure (WRONGTYPE or overflow/parsing), we can use std::optional or a struct.
-    // Simpler: return int64_t, but how to signal error?
-    // Redis returns error if not a string or not an integer.
-    // Let's use a helper struct or std::pair<int64_t, bool> where bool is success.
-    std::pair<int64_t, bool> incrby(const std::string& key, int64_t increment);
+    // INCR key — increments value by 1. Returns new value.
+    int64_t incr(std::string_view key);
+
+    // INCRBY key increment — increments value by increment. Returns new value.
+    int64_t incrby(std::string_view key, int64_t increment);
+
+    // DECR key — decrements value by 1. Returns new value.
+    int64_t decr(std::string_view key);
+
+    // DECRBY key decrement — decrements value by decrement. Returns new value.
+    int64_t decrby(std::string_view key, int64_t decrement);
 
     // --- ZSet Commands ---
 
     // ZADD key score member
-    bool zadd(const std::string& key, double score, const std::string& member);
+    bool zadd(std::string_view key, double score, std::string_view member);
 
     // ZREM key member
-    bool zrem(const std::string& key, const std::string& member);
+    bool zrem(std::string_view key, std::string_view member);
 
     // ZCARD key
-    int64_t zcard(const std::string& key);
+    int64_t zcard(std::string_view key);
 
     // ZSCORE key member
-    std::optional<double> zscore(const std::string& key, const std::string& member);
+    std::optional<double> zscore(std::string_view key, std::string_view member);
+
+    // ZRANK key member
+    std::optional<int64_t> zrank(std::string_view key, std::string_view member);
 
     // ZRANGE key start stop
     struct ZRangeResult
@@ -129,105 +137,110 @@ public:
         std::string_view member;
         double score;
     };
-    std::vector<ZRangeResult> zrange(const std::string& key, int64_t start, int64_t stop);
+    std::vector<ZRangeResult> zrange(std::string_view key, int64_t start, int64_t stop);
 
     // ZRANGEBYSCORE key min max
-    std::vector<ZRangeResult> zrangebyscore(const std::string& key, double min, double max);
+    std::vector<ZRangeResult> zrangebyscore(std::string_view key, double min, double max);
 
     // --- Hash Commands ---
 
     // Returns 1 if field is new and value was set.
     // Returns 0 if field already existed and was updated.
     // Returns -1 if WRONGTYPE.
-    int hset(const std::string& key, const std::string& field, const std::string& value);
+    int hset(std::string_view key, std::string_view field, std::string_view value);
 
-    std::optional<std::string_view> hget(const std::string& key, const std::string& field);
+    std::optional<std::string_view> hget(std::string_view key, std::string_view field);
 
     // Returns 1 if field was removed, 0 if not found. -1 if WRONGTYPE.
-    int hdel(const std::string& key, const std::string& field);
+    int hdel(std::string_view key, std::string_view field);
 
-    int64_t hlen(const std::string& key);
+    int64_t hlen(std::string_view key);
 
     struct HGetAllResult
     {
         std::string field;
         std::string value;
     };
-    std::vector<HGetAllResult> hgetall(const std::string& key);
+    std::vector<HGetAllResult> hgetall(std::string_view key);
 
     // --- List Commands ---
 
     // Returns the length of the list after the push operation.
-    int64_t lpush(const std::string& key, const std::string& value);
-    int64_t rpush(const std::string& key, const std::string& value);
+    int64_t lpush(std::string_view key, std::string_view value);
+    int64_t rpush(std::string_view key, std::string_view value);
 
     // Returns popped value or std::nullopt if list is empty or key not found.
-    std::optional<std::string> lpop(const std::string& key);
-    std::optional<std::string> rpop(const std::string& key);
+    std::optional<std::string> lpop(std::string_view key);
+    std::optional<std::string> rpop(std::string_view key);
 
     // Returns list length. 0 if key does not exist.
-    int64_t llen(const std::string& key);
+    int64_t llen(std::string_view key);
 
     // Returns list elements in range [start, stop].
-    std::vector<std::string> lrange(const std::string& key, int64_t start, int64_t stop);
+    std::vector<std::string> lrange(std::string_view key, int64_t start, int64_t stop);
 
     // --- Set Commands ---
 
     // Returns 1 if member was added, 0 if it was already present.
-    int sadd(const std::string& key, const std::string& member);
+    int sadd(std::string_view key, std::string_view member);
 
     // Returns 1 if member was removed, 0 if it was not present.
-    int srem(const std::string& key, const std::string& member);
+    int srem(std::string_view key, std::string_view member);
 
     // Returns 1 if member is present, 0 if not.
-    int sismember(const std::string& key, const std::string& member);
+    int sismember(std::string_view key, std::string_view member);
 
     // Returns all members.
-    std::vector<std::string> smembers(const std::string& key);
+    std::vector<std::string> smembers(std::string_view key);
 
     // Returns set cardinality (size).
-    int64_t scard(const std::string& key);
+    int64_t scard(std::string_view key);
 
     // --- Key Management ---
 
-    // DEL key — removes entry. Returns true if key existed.
-    bool del(const std::string& key);
+    // DEL key — removes key. Returns true if removed, false if not found.
+    bool del(std::string_view key);
 
     // EXPIRE key — set expiry in milliseconds from now.
-    bool expire(const std::string& key, int64_t ttlMs);
+    bool expire(std::string_view key, int64_t ttlMs);
 
     // PERSIST key — remove expiry.
-    bool persist(const std::string& key);
+    bool persist(std::string_view key);
 
     // TTL key — returns remaining time.
-    int64_t pttl(const std::string& key);
+    int64_t pttl(std::string_view key);
 
     // EXISTS key — returns true if key exists.
-    bool exists(const std::string& key);
+    bool exists(std::string_view key);
 
     // TYPE key — returns key type.
-    EntryType getType(const std::string& key);
+    EntryType getType(std::string_view key);
 
     // KEYS pattern — returns all keys matching pattern (* = all).
-    std::vector<std::string> keys(const std::string& pattern);
+    std::vector<std::string> keys(std::string_view pattern);
 
     // RENAME key newkey — renames key.
-    bool rename(const std::string& key, const std::string& newkey);
+    bool rename(std::string_view key, std::string_view newkey);
 
     size_t size() const
     {
         return _size;
     }
 
+    // --- Persistence & State ---
+
     // Clears all data from the database
     void clear();
 
+    // Use Visitor pattern to scan database state.
+    void accept(IDataVisitor& visitor);
+
 private:
     // Find entry (returns nullptr if not found, WRONGTYPE, or expired)
-    Entry* findEntry(const std::string& key, std::optional<EntryType> expectedType = std::nullopt);
+    Entry* findEntry(std::string_view key, std::optional<EntryType> expectedType = std::nullopt);
 
     // Raw lookup without expiry or type check
-    Entry* findEntryRaw(const std::string& key);
+    Entry* findEntryRaw(std::string_view key);
 
     void removeEntry(Entry* entry);
 

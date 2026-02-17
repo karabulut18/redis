@@ -42,13 +42,15 @@ std::string Client::PrepareResponse(const RespValue& response)
 
 size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
 {
-    PUTF_LN("Client " + std::to_string(_id) + " received " + std::to_string(size) + " bytes");
-    size_t totalConsumed = 0;
-    while (totalConsumed < size)
+    // Append incoming raw bytes to our segmented buffer
+    _inBuffer.append(buffer, size);
+
+    while (!_inBuffer.empty())
     {
         RespValue val;
         size_t bytesRead = 0;
-        RespStatus status = _parser->decode(buffer + totalConsumed, size - totalConsumed, val, bytesRead);
+        // Parse directly from the segmented buffer
+        RespStatus status = _parser->decode(_inBuffer, val, bytesRead);
 
         if (status == RespStatus::Incomplete)
         {
@@ -56,7 +58,8 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
         }
         else if (status == RespStatus::Invalid)
         {
-            PUTF_LN("Invalid RESP protocol");
+            PUTF_LN("Invalid RESP protocol on client " + std::to_string(_id));
+            _inBuffer.consume(_inBuffer.size()); // Clear problematic buffer
             return size;
         }
 
@@ -65,39 +68,40 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
         {
             Command cmd;
             cmd.client = this;
+            cmd.request = std::move(val);
 
-            // Convert RespValue args to string args for our Command struct
-            std::vector<RespValue> args = val.getArray();
-            for (const auto& arg : args)
-            {
-                cmd.args.push_back(std::string(arg.getString()));
-            }
-
-            EnqueueCommand(cmd);
-            PUTF_LN("Enqueued command: " + cmd.args[0]);
+            EnqueueCommand(std::move(cmd));
         }
         else if (val.type == RespType::SimpleString)
         {
-            // Handle inline PING (sent as simple string by some clients)
-            if (val.getString() == "PING")
+            // Handle inline PING/COMMANDS
+            if (val.toString() == "PING")
             {
                 Command cmd;
                 cmd.client = this;
-                cmd.args.push_back("PING");
-                cmd.args.push_back("PING");
-                EnqueueCommand(cmd);
-                PUTF_LN("Enqueued inline PING");
+                // Wrap simple string in an array to maintain internal consistency
+                std::vector<RespValue> args;
+                RespValue arg;
+                arg.type = RespType::BulkString;
+                arg.value = std::string_view("PING");
+                args.push_back(std::move(arg));
+                cmd.request.setArray(std::move(args));
+
+                EnqueueCommand(std::move(cmd));
             }
         }
 
-        totalConsumed += bytesRead;
+        _inBuffer.consume(bytesRead);
     }
-    return totalConsumed;
+
+    // We always report how much we accepted from the network,
+    // which is the full 'size' because we appended it to _inBuffer.
+    return size;
 }
 
 bool Client::EnqueueCommand(Command cmd)
 {
-    return _commandQueue->push(cmd);
+    return _commandQueue->push(std::move(cmd));
 }
 
 bool Client::DequeueCommand(Command& cmd)
@@ -116,6 +120,6 @@ void Client::Ping()
     RespValue val;
     val.type = RespType::SimpleString;
     val.value = std::string_view("PING");
-    std::string encoded = RespParser::encode(val);
+    std::string encoded = _parser->encode(val);
     _connection->Send(encoded.c_str(), encoded.length());
 }

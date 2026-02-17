@@ -408,6 +408,61 @@ void test_lists()
     std::cout << "PASS\n";
 }
 
+void test_incr_decr_type()
+{
+    std::cout << "Database: INCR/DECR/TYPE... ";
+    Database db;
+
+    // INCR new key
+    assert(db.incr("counter") == 1);
+    assert(db.incr("counter") == 2);
+
+    // INCRBY
+    assert(db.incrby("counter", 10) == 12);
+
+    // DECR
+    assert(db.decr("counter") == 11);
+
+    // DECRBY
+    assert(db.decrby("counter", 5) == 6);
+
+    // Type checks
+    assert(db.getType("counter") == EntryType::STRING);
+    assert(*db.get("counter") == "6");
+
+    // Overflow/Parse checks (basic)
+    db.set("str", "abc");
+    try
+    {
+        db.incr("str");
+        assert(false); // Should throw
+    }
+    catch (...)
+    {
+        // Expected
+    }
+
+    // Type mismatch
+    db.hset("hash", "f", "v");
+    try
+    {
+        db.incr("hash");
+        assert(false); // Should throw or handle error
+    }
+    catch (...)
+    {
+        // Expected
+    }
+
+    // TYPE command on various types
+    assert(db.getType("hash") == EntryType::HASH);
+    assert(db.getType("missing") == EntryType::NONE); // Assuming NONE is returned for missing
+
+    std::cout << "PASS\n";
+}
+
+void test_sets();
+
 int main()
 {
     std::cout << "=== Database Tests ===\n";
@@ -420,6 +475,7 @@ int main()
     test_exists();
     test_keys();
     test_rename();
+    test_incr_decr_type();
     test_zsets();
     test_hashes();
     test_lists();

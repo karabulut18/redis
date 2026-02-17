@@ -5,11 +5,11 @@
 
 // --- ZNode ---
 
-ZNode::ZNode(const std::string& n, double s) : score(s), name(n)
+ZNode::ZNode(std::string n, double s) : score(s), name(std::move(n))
 {
     treeNode.init();
     hashNode.next = nullptr;
-    hashNode.code = str_hash(reinterpret_cast<const uint8_t*>(name.data()), name.size());
+    hashNode.code = str_hash(name);
 }
 
 ZNode* ZNode::fromTree(AVLNode* node)
@@ -35,7 +35,7 @@ bool ZNode::less(AVLNode* ln, AVLNode* rn)
     return zl->name < zr->name;
 }
 
-bool ZNode::less(AVLNode* ln, double score, const std::string& name)
+bool ZNode::less(AVLNode* ln, double score, std::string_view name)
 {
     ZNode* znode = fromTree(ln);
     if (znode->score != score)
@@ -51,19 +51,19 @@ ZNode* ZNode::offset(ZNode* node, int64_t off)
 
 // --- ZSet ---
 
-ZNode* ZSet::lookUp(const std::string& name)
+ZNode* ZSet::lookUp(std::string_view name)
 {
     if (_tree.root() == nullptr)
         return nullptr;
 
     ZSET::HKey key;
-    key.hashNode.code = str_hash(reinterpret_cast<const uint8_t*>(name.data()), name.size());
+    key.hashNode.code = str_hash(name);
     key.name = name;
     HNode* found = _map.lookup(&key.hashNode, ZSET::HKey::cmp);
     return found ? ZNode::fromHash(found) : nullptr;
 }
 
-bool ZSet::insert(const std::string& name, double score)
+bool ZSet::insert(std::string name, double score)
 {
     if (ZNode* found = lookUp(name))
     {
@@ -71,7 +71,7 @@ bool ZSet::insert(const std::string& name, double score)
         return false;
     }
 
-    ZNode* node = new ZNode(name, score);
+    ZNode* node = new ZNode(std::move(name), score);
     _map.insert(&node->hashNode);
     _tree.insert(&node->treeNode, static_cast<bool (*)(AVLNode*, AVLNode*)>(ZNode::less));
     _size++;
@@ -100,7 +100,7 @@ void ZSet::remove(ZNode* node)
     delete node;
 }
 
-ZNode* ZSet::seekGe(double score, const std::string& name)
+ZNode* ZSet::seekGe(double score, std::string_view name)
 {
     AVLNode* found = nullptr;
     for (AVLNode* cur = _tree.root(); cur != nullptr;)
@@ -114,6 +114,14 @@ ZNode* ZSet::seekGe(double score, const std::string& name)
         }
     }
     return ZNode::fromTree(found);
+}
+
+int64_t ZSet::getRank(std::string_view name)
+{
+    ZNode* node = lookUp(name);
+    if (!node)
+        return -1;
+    return static_cast<int64_t>(AVLNode::getRank(&node->treeNode));
 }
 
 void ZSet::treeInsert(ZNode* node)

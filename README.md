@@ -11,29 +11,29 @@ A high-performance, multi-threaded Redis server implementation in C++ focusing o
   - Arrays & Sets
   - Maps (Key-Value pairs)
   - Booleans
-- **Zero-Copy Architecture**: Utilizes `std::string_view` for parsing incoming network buffers, eliminating unnecessary heap allocations and memory copies during command processing.
+- **Enhanced Zero-Copy Architecture**: Utilizes `std::string_view` for parsing incoming network buffers and database lookups. Complements this with `SegmentedBuffer` for direct socket reads and a zero-copy persistence path that writes `RespValue` directly to disk without intermediate string conversions.
+- **AOF Persistence**: Full Append Only File support with configurable flush intervals. Implements a background rewriting mechanism (`BGREWRITEAOF`) using a child process to compact the log without blocking command execution.
+- **Visitor Pattern Traversal**: Decoupled database traversal logic using the Visitor pattern, enabling flexible state inspection for AOF rewrites and secondary integrations.
 - **Memory Optimized**: Employs `std::variant` for the core `RespValue` structure, significantly reducing the memory overhead of represented data types through overlapping memory storage.
-- **Multi-threaded I/O**: Custom TCP networking stack supporting `poll`-based event loops.
+- **Multi-threaded I/O**: Custom TCP networking stack supporting `poll`-based event loops and asynchronous response queuing.
 - **Thread Safety**: Implements a lock-free Producer-Consumer pattern using `LockFreeRingBuffer` and self-piping for efficient cross-thread communication without mutex contention on the hot path.
-- **Recursion Safety**: Built-in limits on nested RESP structures to prevent stack overflow attacks.
-- **Structured Logging**: Clean, organized logging architecture that separates logs by application instance.
 
 - **Supported Data Structures**:
-  - **Strings**: `GET`, `SET` (with EX/PX), `DEL`, `TTL`, `EXPIRE`, `INCR`, etc.
+  - **Strings**: `GET`, `SET` (with EX/PX), `DEL`, `TTL`, `EXPIRE`, `INCR`, `DECR`, etc.
   - **Lists**: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LLEN`, `LRANGE`.
-  - **Hashes**: `HSET`, `HGET`, `HDEL`, `HLEN`, `HGETALL`.
+  - **Hashes**: `HSET`, `HGET`, `HDEL`, `HLEN`, `HGETALL`, `HMSET`, `HMGET`.
   - **Sets**: `SADD`, `SREM`, `SISMEMBER`, `SMEMBERS`, `SCARD`.
-  - **Sorted Sets**: `ZADD`, `ZREM`, `ZSCORE`, `ZRANGE`, `ZRANGEBYSCORE`, `ZCARD`.
+  - **Sorted Sets**: `ZADD`, `ZREM`, `ZSCORE`, `ZRANK`, `ZRANGE`, `ZRANGEBYSCORE`, `ZCARD`.
+  - **System**: `PING`, `ECHO`, `CONFIG`, `FLUSHALL`, `BGREWRITEAOF`.
 
 ## 🛠 Architecture
 
 The project is divided into several clear components:
 
-- `lib/`: Core library containing networking (`TcpServer`, `TcpConnection`), the RESP parser (`RespParser`), threading utilities (`LockFreeRingBuffer`), and logging.
+- `lib/`: Core library containing networking (`TcpServer`, `TcpConnection`), the RESP parser (`RespParser`), threading utilities (`LockFreeRingBuffer`), and the Persistence engine.
+- `lib/common/`: Shared utilities including `SegmentedBuffer`, `ProcessUtil` (for fork management), and intrusive data structure helpers.
 - `server/`: The main server logic, implementing a Producer-Consumer architecture. The Network Thread produces commands into a lock-free queue, which the Server Thread consumes. Responses are queued back to the Network Thread for transmission, ensuring thread safety and decoupling.
-- `server/`: The main server logic, handling client state and command execution.
 - `client/`: A test client utility for verifying server behavior and protocol compliance.
-- `build/`: CMake build artifacts.
 
 ## 🏗 Building the Project
 
@@ -43,7 +43,7 @@ The project uses CMake for building. Ensure you have a C++17 compliant compiler 
 mkdir -p build
 cd build
 cmake ..
-make
+make -j$(sysctl -n hw.ncpu)
 ```
 
 ## 🚦 Getting Started
@@ -52,39 +52,34 @@ make
 ```bash
 ./build/server/redis_server
 ```
-The server will start listening on the default Redis port (6379) and begin accepting RESP-compliant connections.
+The server will start listening on the default Redis port (6379), load its AOF state, and begin accepting connections.
 
-### Running the Included Client
+### Persistence Configuration
+The server supports configurable persistence through the standard `CONFIG` command:
 ```bash
-./build/client/redis_client
-```
-The client connects to a hardcoded local address (127.0.0.1:6379) and periodically sends PING commands to verify connectivity and latency. Command-line argument support is planned for a future update.
-
-### Testing with Official CLI
-You can also use the standard `redis-cli` to interact with this server:
-```bash
-redis-cli PING
+redis-cli CONFIG SET appendfsync-interval 5  # Flush to disk every 5 seconds
+redis-cli BGREWRITEAOF                      # Trigger background compaction
 ```
 
-### Running Tests
+## 🚥 Testing
+
 The project includes a suite of unit and integration tests.
+
 ```bash
-# Run all unit tests
+# Run all core tests
 ./build/test/test_ringbuffer
 ./build/test/test_hashmap
 ./build/test/test_avltree
 ./build/test/test_database
 ./build/test/test_resp_parser
-./build/test/test_zset
+./build/test/test_segmented_buffer
 ./build/test/test_network
-
-# Run integration tests (requires python3)
-python3 test_integration.py
 ```
 
 ## 📝 Future Roadmap
 
-- [ ] Persistence (RDB/AOF).
+- [x] Persistence (AOF with Background Rewrite).
+- [ ] RDB Binary Export.
 - [ ] Pub/Sub support.
 - [ ] Advanced commands (`BRPOP`, `HINCRBY`, `MGET`, etc.).
 

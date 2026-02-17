@@ -1,9 +1,8 @@
 #pragma once
 
 #include "ConcurrencyType.h"
-#include "DynamicBuffer.h"
+#include "SegmentedBuffer.h"
 #include "constants.h"
-#include "frame_header.h"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -37,8 +36,6 @@ class TcpConnection
 
     std::atomic<ClientState> _state;
 
-    char _buffer[TCP_MAX_MESSAGE_SIZE];
-
 public:
     int _port;
     char _ip[IP_NAME_LENGTH];
@@ -47,8 +44,8 @@ public:
     bool _connWrite = false;
     bool _connClose = false;
 
-    DynamicBuffer _incoming;
-    DynamicBuffer _outgoing;
+    SegmentedBuffer _incoming;
+    SegmentedBuffer _outgoing;
 
     ~TcpConnection();
 

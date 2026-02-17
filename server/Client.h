@@ -3,6 +3,7 @@
 #include "../lib/common/ITcpConnection.h"
 
 #include "../lib/common/LockFreeRingBuffer.h"
+#include "../lib/common/SegmentedBuffer.h"
 #include "Command.h"
 
 class TcpConnection;
@@ -36,6 +37,7 @@ public:
 private:
     TcpConnection* _connection = nullptr;
     RespParser* _parser = nullptr;
+    SegmentedBuffer _inBuffer;
 
     // Per-client lock-free queue (capacity 1024 commands)
     LockFreeRingBuffer<Command>* _commandQueue = nullptr;

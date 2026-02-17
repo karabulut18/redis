@@ -17,8 +17,11 @@ add_executable(test_resp_parser test_resp_parser.cpp)
 target_link_libraries(test_resp_parser redis_lib)
 
 
-add_executable(test_zset test_zset.cpp)
-target_link_libraries(test_zset redis_lib)
+add_executable(test_zrank test_zrank.cpp)
+target_link_libraries(test_zrank redis_lib)
 
 add_executable(test_network test_network.cpp)
 target_link_libraries(test_network redis_lib)
+
+add_executable(test_segmented_buffer test_segmented_buffer.cpp)
+target_link_libraries(test_segmented_buffer redis_lib)
