@@ -28,12 +28,16 @@ A high-performance, multi-threaded Redis server implementation in C++ focusing o
 
 ## 🛠 Architecture
 
+![Architecture](doc/architecture_diagram.png)
+
 The project is divided into several clear components:
 
 - `lib/`: Core library containing networking (`TcpServer`, `TcpConnection`), the RESP parser (`RespParser`), threading utilities (`LockFreeRingBuffer`), and the Persistence engine.
 - `lib/common/`: Shared utilities including `SegmentedBuffer`, `ProcessUtil` (for fork management), and intrusive data structure helpers.
 - `server/`: The main server logic, implementing a Producer-Consumer architecture. The Network Thread produces commands into a lock-free queue, which the Server Thread consumes. Responses are queued back to the Network Thread for transmission, ensuring thread safety and decoupling.
 - `client/`: A test client utility for verifying server behavior and protocol compliance.
+
+For a detailed deep-dive into the system design, please refer to the [Architecture Report](doc/report.pdf).
 
 ## 🏗 Building the Project
 

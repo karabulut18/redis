@@ -1,0 +1,74 @@
+classDiagram
+    class Server {
+        -TcpServer* tcpServer
+        -map~int, Client*~ clients
+        -Database db
+        -Persistence* persistence
+        +Run()
+        +HandleCommand()
+    }
+
+    class TcpServer {
+        -map~int, TcpConnection*~ connections
+        +Listen()
+        +Poll()
+    }
+
+    class Client {
+        -TcpConnection* connection
+        -RespParser* parser
+        -LockFreeRingBuffer~Command~* commandQueue
+        +OnMessageReceive()
+        +PrepareResponse()
+    }
+
+    class TcpConnection {
+        -SegmentedBuffer incoming
+        -SegmentedBuffer outgoing
+        +Read()
+        +Write()
+    }
+
+    class LockFreeRingBuffer {
+        +Push()
+        +Pop()
+    }
+
+    class Database {
+        -HashMap map
+        -AVLTree zsets
+        +set/get/del()
+        +accept(IDataVisitor)
+    }
+
+    class Persistence {
+        +Append(RespValue)
+        +Load()
+    }
+
+    class IDataVisitor {
+        <<interface>>
+        +onString()
+        +onList()
+        +onSet()
+    }
+
+    class RespParser {
+        +decode(SegmentedBuffer)
+        +encode(RespValue)
+    }
+
+    Server *-- TcpServer : owns
+    Server "1" o-- "many" Client : manages
+    TcpServer "1" o-- "many" TcpConnection : manages sockets
+    Client --> TcpConnection : wraps
+    Client *-- RespParser : uses
+    Client *-- LockFreeRingBuffer : owns queue
+    
+    Server --> Database : manages
+    Server --> Persistence : manages
+    
+    TcpConnection *-- SegmentedBuffer : buffers I/O
+    
+    Persistence ..> IDataVisitor : uses
+    Database ..> IDataVisitor : accepts

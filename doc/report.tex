@@ -1,0 +1,111 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{amsmath}
+
+\geometry{margin=1in}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstset{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\title{\textbf{Redis-from-Scratch: High-Performance C++ Implementation}}
+\author{Antigravity Technical Report}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+This report details the implementation of a high-performance Redis-like server written in C++. The project focuses on modern C++ paradigms, memory efficiency through zero-copy architectures, and reliable persistence mechanisms.
+
+\section{System Architecture}
+The server employs a decoupled \textbf{Producer-Consumer} architecture, visualized in Figure \ref{fig:architecture}.
+
+\begin{figure}[h]
+    \centering
+    % Ensure you have generated architecture_diagram.pdf from the mermaid file
+    % \includegraphics[width=0.9\textwidth]{architecture_diagram.pdf} 
+    \includegraphics[width=0.9\textwidth]{architecture_diagram}
+    \caption{System Architecture Class Diagram}
+    \label{fig:architecture}
+\end{figure}
+
+The core components are:
+\begin{itemize}
+    \item \textbf{Server}: The central coordinator that initializes the networking stack and the database. It manages a collection of \texttt{Client} objects.
+    \item \textbf{TcpServer \& TcpConnection}: Handle the raw socket I/O and event polling (using \texttt{poll}).
+    \item \textbf{Client}: Encapsulates the state of a connected client, including its protocol parser (\texttt{RespParser}) and a command queue.
+    \item \textbf{Lock-Free Ring Buffer}: A thread-safe queue used by the \texttt{Client} to buffer parsed commands for the main server thread to consume.
+    \item \textbf{Database}: The core data store supporting various Redis data types.
+\end{itemize}
+
+\section{Core Implementation \& Optimizations}
+\subsection{Zero-Copy Data Path}
+Memory efficiency is achieved by minimizing data copies throughout the stack:
+\begin{itemize}
+    \item \textbf{SegmentedBuffer}: Custom buffer management that allows direct socket reads into pre-allocated segments.
+    \item \textbf{std::string\_view}: Used for all key lookups and command parsing, pointing directly into the network segments instead of allocating new heap memory.
+    \item \textbf{RespValue Variant}: A memory-optimized \texttt{std::variant} that represents all Redis data types with minimal overhead.
+\end{itemize}
+
+\subsection{Data Structures}
+The database utilizes custom intrusive data structures:
+\begin{itemize}
+    \item \textbf{Intrusive HashMap}: Supports incremental rehashing to prevent latency spikes during resizing.
+    \item \textbf{AVL Tree}: Powers Sorted Sets (\texttt{ZSET}), maintaining balanced order for efficient range queries.
+\end{itemize}
+
+\section{Persistence \& The Visitor Pattern}
+To ensure data durability, the system implements an \textbf{Append Only File (AOF)} mechanism.
+
+\subsection{Background AOF Rewrite}
+AOF files can grow indefinitely. Compaction is handled via the \texttt{BGREWRITEAOF} command:
+\begin{itemize}
+    \item \textbf{Forking}: The server forks a child process to perform a point-in-time snapshot of the database state.
+    \item \textbf{Visitor Pattern}: The database implements an \texttt{accept(IDataVisitor\&)} method. This pattern decouples the internal data structure layouts from the persistence serialization logic. The \texttt{AofRewriteVisitor} traverses the database and writes a compacted set of RESP commands to a temporary file.
+\end{itemize}
+
+\section{Roadmap \& Future Work}
+\subsection{Pub/Sub Mechanism}
+The next major architectural phase will be the implementation of \textbf{Pub/Sub}. This will involve:
+\begin{itemize}
+    \item A global subscription registry to track client interests in channels.
+    \item Efficient message broadcasting from producers to subscribers.
+    \item Integration with the multi-threaded I/O layer to handle asynchronous notifications.
+\end{itemize}
+
+\subsection{Advanced Features}
+Future developments include RDB binary snapshots, \texttt{WATCH/MULTI} transactions, and cluster support.
+
+\section{Conclusion}
+The Redis-from-Scratch project demonstrates that zero-copy lookups and efficient thread-safety patterns can significantly enhance the throughput of networked data stores in C++.
+
+\end{document}
