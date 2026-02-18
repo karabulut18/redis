@@ -51,7 +51,10 @@ enum class CommandId
     Client,
     FlushAll,
     Config,
-    BgRewriteAof
+    BgRewriteAof,
+    Keys,
+    Exists,
+    Rename
 };
 
 inline CommandId GetCommandId(const std::string& command)
@@ -99,7 +102,10 @@ inline CommandId GetCommandId(const std::string& command)
                                                                           {"CLIENT", CommandId::Client},
                                                                           {"FLUSHALL", CommandId::FlushAll},
                                                                           {"CONFIG", CommandId::Config},
-                                                                          {"BGREWRITEAOF", CommandId::BgRewriteAof}};
+                                                                          {"BGREWRITEAOF", CommandId::BgRewriteAof},
+                                                                          {"KEYS", CommandId::Keys},
+                                                                          {"EXISTS", CommandId::Exists},
+                                                                          {"RENAME", CommandId::Rename}};
 
     std::string upperCmd = command;
     std::transform(upperCmd.begin(), upperCmd.end(), upperCmd.begin(), ::toupper);
@@ -137,6 +143,7 @@ inline bool IsWriteCommand(CommandId id)
     case CommandId::SAdd:
     case CommandId::SRem:
     case CommandId::FlushAll:
+    case CommandId::Rename:
         return true;
     default:
         return false;

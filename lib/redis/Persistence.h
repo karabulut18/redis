@@ -65,7 +65,7 @@ private:
     ProcessUtil _rewriteProcess;
     std::string _tmpFilepath;
     std::vector<std::string> _rewriteBuffer;
-    mutable std::mutex _rewriteMutex;
+    // _rewriteBuffer is protected by _mutex (consistent lock ordering, no deadlock risk)
     std::atomic<bool> _isRewriting{false};
 
     void HandleRewriteCompletion();

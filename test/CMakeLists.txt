@@ -25,3 +25,6 @@ target_link_libraries(test_network redis_lib)
 
 add_executable(test_segmented_buffer test_segmented_buffer.cpp)
 target_link_libraries(test_segmented_buffer redis_lib)
+
+add_executable(test_persistence test_persistence.cpp)
+target_link_libraries(test_persistence redis_lib)

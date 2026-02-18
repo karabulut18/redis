@@ -664,26 +664,76 @@ bool Database::exists(std::string_view key)
 {
     return findEntry(key) != nullptr;
 }
-// Simple glob matching: supports "*", "prefix*", "*suffix", "pre*suf"
-static bool matchPattern(const std::string& pattern, const std::string& str)
+// Full Redis-compatible glob matching: supports *, ?, [abc], [a-z], [^...]
+static bool matchPattern(const std::string& pattern, const std::string& str, size_t pi = 0, size_t si = 0)
 {
-    if (pattern == "*")
-        return true;
-
-    size_t star = pattern.find('*');
-    if (star == std::string::npos)
-        return pattern == str; // exact match
-
-    std::string prefix = pattern.substr(0, star);
-    std::string suffix = pattern.substr(star + 1);
-
-    if (str.size() < prefix.size() + suffix.size())
-        return false;
-    if (str.compare(0, prefix.size(), prefix) != 0)
-        return false;
-    if (!suffix.empty() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) != 0)
-        return false;
-    return true;
+    while (pi < pattern.size())
+    {
+        char p = pattern[pi];
+        if (p == '*')
+        {
+            // Skip consecutive stars
+            while (pi < pattern.size() && pattern[pi] == '*')
+                pi++;
+            if (pi == pattern.size())
+                return true; // trailing * matches everything
+            // Try matching the rest of the pattern at each position
+            for (size_t i = si; i <= str.size(); i++)
+                if (matchPattern(pattern, str, pi, i))
+                    return true;
+            return false;
+        }
+        else if (p == '?')
+        {
+            if (si >= str.size())
+                return false;
+            pi++;
+            si++;
+        }
+        else if (p == '[')
+        {
+            if (si >= str.size())
+                return false;
+            size_t end = pattern.find(']', pi + 1);
+            if (end == std::string::npos)
+            {
+                // Malformed bracket — treat '[' as literal
+                if (str[si] != '[')
+                    return false;
+                pi++;
+                si++;
+                continue;
+            }
+            bool negate = (pi + 1 < end && pattern[pi + 1] == '^');
+            size_t start = pi + 1 + (negate ? 1 : 0);
+            bool matched = false;
+            for (size_t j = start; j < end && !matched; j++)
+            {
+                if (j + 2 < end && pattern[j + 1] == '-')
+                {
+                    if (str[si] >= pattern[j] && str[si] <= pattern[j + 2])
+                        matched = true;
+                    j += 2;
+                }
+                else if (str[si] == pattern[j])
+                {
+                    matched = true;
+                }
+            }
+            if (matched == negate)
+                return false;
+            pi = end + 1;
+            si++;
+        }
+        else
+        {
+            if (si >= str.size() || str[si] != p)
+                return false;
+            pi++;
+            si++;
+        }
+    }
+    return si == str.size();
 }
 
 std::vector<std::string> Database::keys(std::string_view pattern)

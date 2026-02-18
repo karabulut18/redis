@@ -70,7 +70,14 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
             cmd.client = this;
             cmd.request = std::move(val);
 
-            EnqueueCommand(std::move(cmd));
+            if (!EnqueueCommand(std::move(cmd)))
+            {
+                PUTF_LN("WARN: command queue full for client " + std::to_string(_id) + ", dropping command");
+                RespValue err;
+                err.type = RespType::Error;
+                err.value = std::string_view("ERR server command queue full, please retry");
+                SendResponse(err);
+            }
         }
         else if (val.type == RespType::SimpleString)
         {
@@ -87,7 +94,14 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
                 args.push_back(std::move(arg));
                 cmd.request.setArray(std::move(args));
 
-                EnqueueCommand(std::move(cmd));
+                if (!EnqueueCommand(std::move(cmd)))
+                {
+                    PUTF_LN("WARN: command queue full for client " + std::to_string(_id) + ", dropping PING");
+                    RespValue err;
+                    err.type = RespType::Error;
+                    err.value = std::string_view("ERR server command queue full, please retry");
+                    SendResponse(err);
+                }
             }
         }
 
@@ -101,7 +115,10 @@ size_t Client::OnMessageReceive(const char* buffer, m_size_t size)
 
 bool Client::EnqueueCommand(Command cmd)
 {
-    return _commandQueue->push(std::move(cmd));
+    bool ok = _commandQueue->push(std::move(cmd));
+    if (ok)
+        Server::Get()->WakeUp(); // Wake main thread immediately
+    return ok;
 }
 
 bool Client::DequeueCommand(Command& cmd)

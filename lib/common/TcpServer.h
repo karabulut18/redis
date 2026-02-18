@@ -2,7 +2,6 @@
 
 #include "ConcurrencyType.h"
 #include "Error.h"
-#include "LockFreeRingBuffer.h"
 #include <atomic>
 #include <condition_variable>
 #include <map>
@@ -43,13 +42,6 @@ protected:
 
 public:
     int _socketfd;
-    struct PendingResponse
-    {
-        int clientSocketFd;
-        std::string data;
-    };
-
-    LockFreeRingBuffer<PendingResponse>* _responseQueue;
     int _wakeupPipe[2]; // [0] = read, [1] = write
 
 public:

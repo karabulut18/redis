@@ -11,8 +11,8 @@
 
 Server* Server::Get()
 {
-    static Server* instance = new Server();
-    return instance;
+    static Server instance;
+    return &instance;
 }
 
 Server::Server()
@@ -41,7 +41,7 @@ bool Server::Init()
             // Use a fake client with ID -1 for replay
             // We reuse the existing Client class but pass nullptr as connection.
             // Ensure Client constructor/methods don't crash with nullptr connection.
-            static Client* fakeClient = new Client(-1, nullptr);
+            Client fakeClient(-1, nullptr);
 
             // We need to temporarily disable persistence appending during replay
             // otherwise we might double-write (though logic is "HandleCommand" calls Append)
@@ -66,7 +66,7 @@ bool Server::Init()
                 arr.push_back(std::move(val));
             }
 
-            HandleCommand(fakeClient, request);
+            ProcessCommand(&fakeClient, request);
 
             _persistence = p; // Restore
         });
@@ -119,7 +119,10 @@ void Server::Run()
         ProcessCommands();
         if (_persistence)
             _persistence->Tick();
-        usleep(100);
+        {
+            std::unique_lock<std::mutex> lock(_wakeupMutex);
+            _wakeupCv.wait_for(lock, std::chrono::milliseconds(1));
+        }
     }
     PUTF_LN("Server stopped\n");
 }
@@ -127,25 +130,31 @@ void Server::Run()
 void Server::OnClientDisconnect(int id)
 {
     PUTF_LN("Client disconnected: " + std::to_string(id));
-    std::lock_guard<std::mutex> lock(_clientsMutex);
-    auto it = _clients.find(id);
-    if (it != _clients.end())
-    {
-        delete it->second;
-        _clients.erase(it);
-    }
+    // Don't touch _clients here — we're on the I/O thread.
+    // Push the ID to the deferred queue; the main thread will clean up.
+    _pendingDisconnects.push(id);
 }
 
 void Server::ProcessCommands()
 {
-    std::lock_guard<std::mutex> lock(_clientsMutex);
+    // Drain deferred disconnects first — main thread is the only writer to _clients.
+    int disconnectedId;
+    while (_pendingDisconnects.pop(disconnectedId))
+    {
+        auto it = _clients.find(disconnectedId);
+        if (it != _clients.end())
+        {
+            delete it->second;
+            _clients.erase(it);
+        }
+    }
+
+    // Iterate _clients — no concurrent writers, no lock needed.
     for (auto& [id, client] : _clients)
     {
         Command cmd;
         while (client->DequeueCommand(cmd))
-        {
-            HandleCommand(client, cmd.request);
-        }
+            ProcessCommand(client, cmd.request);
     }
 }
 
@@ -155,7 +164,12 @@ void Server::QueueResponse(Client* client, const RespValue& response)
     _tcpServer->QueueResponse(client->GetId(), data);
 }
 
-void Server::HandleCommand(Client* client, const RespValue& request)
+void Server::WakeUp()
+{
+    _wakeupCv.notify_one();
+}
+
+void Server::ProcessCommand(Client* client, const RespValue& request)
 {
     if (request.type != RespType::Array)
         return;
@@ -173,136 +187,145 @@ void Server::HandleCommand(Client* client, const RespValue& request)
     switch (id)
     {
     case CommandId::Ping:
-        HandlePing(arr, response);
+        PC_Ping(arr, response);
         break;
     case CommandId::Echo:
-        HandleEcho(arr, response);
+        PC_Echo(arr, response);
         break;
     case CommandId::Set:
-        HandleSet(arr, response);
+        PC_Set(arr, response);
         break;
     case CommandId::Get:
-        HandleGet(arr, response);
+        PC_Get(arr, response);
         break;
     case CommandId::Del:
-        HandleDel(arr, response);
+        PC_Del(arr, response);
         break;
     case CommandId::Config:
-        HandleConfig(arr, response);
+        PC_Config(arr, response);
         break;
     case CommandId::Expire:
-        HandleExpire(arr, response);
+        PC_Expire(arr, response);
         break;
     case CommandId::PExpire:
-        HandlePExpire(arr, response);
+        PC_PExpire(arr, response);
         break;
     case CommandId::Ttl:
-        HandleTtl(arr, response);
+        PC_Ttl(arr, response);
         break;
     case CommandId::PTtl:
-        HandlePTtl(arr, response);
+        PC_PTtl(arr, response);
         break;
     case CommandId::Persist:
-        HandlePersist(arr, response);
+        PC_Persist(arr, response);
         break;
     case CommandId::Incr:
-        HandleIncr(arr, response);
+        PC_Incr(arr, response);
         break;
     case CommandId::IncrBy:
-        HandleIncrBy(arr, response);
+        PC_IncrBy(arr, response);
         break;
     case CommandId::Decr:
-        HandleDecr(arr, response);
+        PC_Decr(arr, response);
         break;
     case CommandId::DecrBy:
-        HandleDecrBy(arr, response);
+        PC_DecrBy(arr, response);
         break;
     case CommandId::Type:
-        HandleType(arr, response);
+        PC_Type(arr, response);
         break;
     case CommandId::ZAdd:
-        HandleZAdd(arr, response);
+        PC_ZAdd(arr, response);
         break;
     case CommandId::ZRem:
-        HandleZRem(arr, response);
+        PC_ZRem(arr, response);
         break;
     case CommandId::ZScore:
-        HandleZScore(arr, response);
+        PC_ZScore(arr, response);
         break;
     case CommandId::ZRank:
-        HandleZRank(arr, response);
+        PC_ZRank(arr, response);
         break;
     case CommandId::ZRange:
-        HandleZRange(arr, response);
+        PC_ZRange(arr, response);
         break;
     case CommandId::ZRangeByScore:
-        HandleZRangeByScore(arr, response);
+        PC_ZRangeByScore(arr, response);
         break;
     case CommandId::ZCard:
-        HandleZCard(arr, response);
+        PC_ZCard(arr, response);
         break;
     case CommandId::HSet:
-        HandleHSet(arr, response);
+        PC_HSet(arr, response);
         break;
     case CommandId::HGet:
-        HandleHGet(arr, response);
+        PC_HGet(arr, response);
         break;
     case CommandId::HDel:
-        HandleHDel(arr, response);
+        PC_HDel(arr, response);
         break;
     case CommandId::HGetAll:
-        HandleHGetAll(arr, response);
+        PC_HGetAll(arr, response);
         break;
     case CommandId::HLen:
-        HandleHLen(arr, response);
+        PC_HLen(arr, response);
         break;
     case CommandId::HMSet:
-        HandleHMSet(arr, response);
+        PC_HMSet(arr, response);
         break;
     case CommandId::HMGet:
-        HandleHMGet(arr, response);
+        PC_HMGet(arr, response);
         break;
     case CommandId::LPush:
-        HandleLPush(arr, response);
+        PC_LPush(arr, response);
         break;
     case CommandId::RPush:
-        HandleRPush(arr, response);
+        PC_RPush(arr, response);
         break;
     case CommandId::LPop:
-        HandleLPop(arr, response);
+        PC_LPop(arr, response);
         break;
     case CommandId::RPop:
-        HandleRPop(arr, response);
+        PC_RPop(arr, response);
         break;
     case CommandId::LLen:
-        HandleLLen(arr, response);
+        PC_LLen(arr, response);
         break;
     case CommandId::LRange:
-        HandleLRange(arr, response);
+        PC_LRange(arr, response);
         break;
     case CommandId::SAdd:
-        HandleSAdd(arr, response);
+        PC_SAdd(arr, response);
         break;
     case CommandId::SRem:
-        HandleSRem(arr, response);
+        PC_SRem(arr, response);
         break;
     case CommandId::SIsMember:
-        HandleSIsMember(arr, response);
+        PC_SIsMember(arr, response);
         break;
     case CommandId::SMembers:
-        HandleSMembers(arr, response);
+        PC_SMembers(arr, response);
         break;
     case CommandId::SCard:
-        HandleSCard(arr, response);
+        PC_SCard(arr, response);
         break;
     case CommandId::Client:
-        HandleClient(arr, response);
+        PC_Client(arr, response);
         break;
     case CommandId::FlushAll:
-        HandleFlushAll(arr, response);
+        PC_FlushAll(arr, response);
         break;
     case CommandId::BgRewriteAof:
-        HandleBgRewriteAof(arr, response);
+        PC_BgRewriteAof(arr, response);
+        break;
+    case CommandId::Keys:
+        PC_Keys(arr, response);
+        break;
+    case CommandId::Exists:
+        PC_Exists(arr, response);
+        break;
+    case CommandId::Rename:
+        PC_Rename(arr, response);
         break;
     case CommandId::Unknown:
         response.type = RespType::Error;
@@ -322,7 +345,7 @@ void Server::HandleCommand(Client* client, const RespValue& request)
 
     QueueResponse(client, response);
 }
-void Server::HandleDel(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Del(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -342,7 +365,7 @@ void Server::HandleDel(const std::vector<RespValue>& args, RespValue& response)
 
 // ...
 
-void Server::HandleIncr(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Incr(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() != 2)
     {
@@ -351,12 +374,19 @@ void Server::HandleIncr(const std::vector<RespValue>& args, RespValue& response)
         return;
     }
     std::string key = args[1].toString();
-    int64_t val = _db.incr(key);
-    response.type = RespType::Integer;
-    response.value = val;
+    try
+    {
+        response.type = RespType::Integer;
+        response.value = _db.incr(key);
+    }
+    catch (const std::exception& e)
+    {
+        response.type = RespType::Error;
+        response.value = std::string(e.what());
+    }
 }
 
-void Server::HandleIncrBy(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_IncrBy(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() != 3)
     {
@@ -376,12 +406,19 @@ void Server::HandleIncrBy(const std::vector<RespValue>& args, RespValue& respons
         return;
     }
     std::string key = args[1].toString();
-    int64_t val = _db.incrby(key, increment);
-    response.type = RespType::Integer;
-    response.value = val;
+    try
+    {
+        response.type = RespType::Integer;
+        response.value = _db.incrby(key, increment);
+    }
+    catch (const std::exception& e)
+    {
+        response.type = RespType::Error;
+        response.value = std::string(e.what());
+    }
 }
 
-void Server::HandleDecr(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Decr(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() != 2)
     {
@@ -390,12 +427,19 @@ void Server::HandleDecr(const std::vector<RespValue>& args, RespValue& response)
         return;
     }
     std::string key = args[1].toString();
-    int64_t val = _db.decr(key);
-    response.type = RespType::Integer;
-    response.value = val;
+    try
+    {
+        response.type = RespType::Integer;
+        response.value = _db.decr(key);
+    }
+    catch (const std::exception& e)
+    {
+        response.type = RespType::Error;
+        response.value = std::string(e.what());
+    }
 }
 
-void Server::HandleDecrBy(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_DecrBy(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() != 3)
     {
@@ -415,12 +459,19 @@ void Server::HandleDecrBy(const std::vector<RespValue>& args, RespValue& respons
         return;
     }
     std::string key = args[1].toString();
-    int64_t val = _db.decrby(key, decrement);
-    response.type = RespType::Integer;
-    response.value = val;
+    try
+    {
+        response.type = RespType::Integer;
+        response.value = _db.decrby(key, decrement);
+    }
+    catch (const std::exception& e)
+    {
+        response.type = RespType::Error;
+        response.value = std::string(e.what());
+    }
 }
 
-void Server::HandleType(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Type(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() != 2)
     {
@@ -437,7 +488,7 @@ void Server::HandleType(const std::vector<RespValue>& args, RespValue& response)
         response.value = std::string_view("none");
         break;
     case EntryType::STRING:
-        response.value = std::string_view("simple");
+        response.value = std::string_view("string");
         break;
     case EntryType::LIST:
         response.value = std::string_view("list");
@@ -454,7 +505,7 @@ void Server::HandleType(const std::vector<RespValue>& args, RespValue& response)
     }
 }
 
-void Server::HandleExpire(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Expire(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -477,7 +528,7 @@ void Server::HandleExpire(const std::vector<RespValue>& args, RespValue& respons
     }
 }
 
-void Server::HandlePExpire(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_PExpire(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -500,7 +551,7 @@ void Server::HandlePExpire(const std::vector<RespValue>& args, RespValue& respon
     }
 }
 
-void Server::HandleTtl(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Ttl(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -513,7 +564,7 @@ void Server::HandleTtl(const std::vector<RespValue>& args, RespValue& response)
     response.value = (pttl >= 0) ? (pttl / 1000) : pttl;
 }
 
-void Server::HandlePTtl(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_PTtl(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -525,7 +576,7 @@ void Server::HandlePTtl(const std::vector<RespValue>& args, RespValue& response)
     response.value = _db.pttl(args[1].toString());
 }
 
-void Server::HandlePersist(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Persist(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -538,7 +589,7 @@ void Server::HandlePersist(const std::vector<RespValue>& args, RespValue& respon
     response.value = ok ? int64_t(1) : int64_t(0);
 }
 
-void Server::HandlePing(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Ping(const std::vector<RespValue>& args, RespValue& response)
 {
     response.type = RespType::SimpleString;
     if (args.size() > 1)
@@ -547,7 +598,7 @@ void Server::HandlePing(const std::vector<RespValue>& args, RespValue& response)
         response.value = std::string_view("PONG");
 }
 
-void Server::HandleEcho(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Echo(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -559,7 +610,7 @@ void Server::HandleEcho(const std::vector<RespValue>& args, RespValue& response)
     response.value = args[1].toString();
 }
 
-void Server::HandleSet(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Set(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -604,7 +655,7 @@ void Server::HandleSet(const std::vector<RespValue>& args, RespValue& response)
     response.value = std::string_view("OK");
 }
 
-void Server::HandleGet(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Get(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -626,7 +677,7 @@ void Server::HandleGet(const std::vector<RespValue>& args, RespValue& response)
     }
 }
 
-void Server::HandleZAdd(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZAdd(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 4 || (args.size() - 2) % 2 != 0)
     {
@@ -657,7 +708,7 @@ void Server::HandleZAdd(const std::vector<RespValue>& args, RespValue& response)
     response.value = (int64_t)addedCount;
 }
 
-void Server::HandleZRem(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZRem(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -676,7 +727,7 @@ void Server::HandleZRem(const std::vector<RespValue>& args, RespValue& response)
     response.value = (int64_t)removedCount;
 }
 
-void Server::HandleZCard(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZCard(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -688,7 +739,7 @@ void Server::HandleZCard(const std::vector<RespValue>& args, RespValue& response
     response.value = _db.zcard(args[1].toString());
 }
 
-void Server::HandleZScore(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZScore(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -712,7 +763,7 @@ void Server::HandleZScore(const std::vector<RespValue>& args, RespValue& respons
     }
 }
 
-void Server::HandleZRange(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZRange(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 4)
     {
@@ -769,7 +820,7 @@ void Server::HandleZRange(const std::vector<RespValue>& args, RespValue& respons
     response.setArray(std::move(arr));
 }
 
-void Server::HandleZRangeByScore(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZRangeByScore(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 4)
     {
@@ -804,7 +855,7 @@ void Server::HandleZRangeByScore(const std::vector<RespValue>& args, RespValue& 
     response.setArray(std::move(arr));
 }
 
-void Server::HandleZRank(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_ZRank(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -828,7 +879,7 @@ void Server::HandleZRank(const std::vector<RespValue>& args, RespValue& response
 
 // ...
 
-void Server::HandleHSet(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HSet(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 4)
     {
@@ -839,12 +890,18 @@ void Server::HandleHSet(const std::vector<RespValue>& args, RespValue& response)
     std::string key = args[1].toString();
     std::string field = args[2].toString();
     std::string value = args[3].toString();
-    bool isNew = _db.hset(key, field, value);
+    int result = _db.hset(key, field, value);
+    if (result < 0)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+        return;
+    }
     response.type = RespType::Integer;
-    response.value = isNew ? int64_t(1) : int64_t(0);
+    response.value = result ? int64_t(1) : int64_t(0);
 }
 
-void Server::HandleHGet(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HGet(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -866,7 +923,7 @@ void Server::HandleHGet(const std::vector<RespValue>& args, RespValue& response)
     }
 }
 
-void Server::HandleHDel(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HDel(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -885,7 +942,7 @@ void Server::HandleHDel(const std::vector<RespValue>& args, RespValue& response)
     response.value = deleted;
 }
 
-void Server::HandleHGetAll(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HGetAll(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -910,7 +967,7 @@ void Server::HandleHGetAll(const std::vector<RespValue>& args, RespValue& respon
     response.setArray(std::move(arr));
 }
 
-void Server::HandleHLen(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HLen(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -922,7 +979,7 @@ void Server::HandleHLen(const std::vector<RespValue>& args, RespValue& response)
     response.value = (int64_t)_db.hlen(args[1].toString());
 }
 
-void Server::HandleHMSet(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HMSet(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 4 || (args.size() - 2) % 2 != 0)
     {
@@ -939,7 +996,7 @@ void Server::HandleHMSet(const std::vector<RespValue>& args, RespValue& response
     response.value = std::string_view("OK");
 }
 
-void Server::HandleHMGet(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_HMGet(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -966,7 +1023,7 @@ void Server::HandleHMGet(const std::vector<RespValue>& args, RespValue& response
     response.setArray(std::move(arr));
 }
 
-void Server::HandleLPush(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_LPush(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -979,12 +1036,18 @@ void Server::HandleLPush(const std::vector<RespValue>& args, RespValue& response
     for (size_t i = 2; i < args.size(); i++)
     {
         len = _db.lpush(key, args[i].toString());
+        if (len < 0)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            return;
+        }
     }
     response.type = RespType::Integer;
     response.value = len;
 }
 
-void Server::HandleRPush(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_RPush(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -997,12 +1060,18 @@ void Server::HandleRPush(const std::vector<RespValue>& args, RespValue& response
     for (size_t i = 2; i < args.size(); i++)
     {
         len = _db.rpush(key, args[i].toString());
+        if (len < 0)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            return;
+        }
     }
     response.type = RespType::Integer;
     response.value = len;
 }
 
-void Server::HandleLPop(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_LPop(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -1022,7 +1091,7 @@ void Server::HandleLPop(const std::vector<RespValue>& args, RespValue& response)
     }
 }
 
-void Server::HandleRPop(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_RPop(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -1042,7 +1111,7 @@ void Server::HandleRPop(const std::vector<RespValue>& args, RespValue& response)
     }
 }
 
-void Server::HandleLLen(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_LLen(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -1054,7 +1123,7 @@ void Server::HandleLLen(const std::vector<RespValue>& args, RespValue& response)
     response.value = _db.llen(args[1].toString());
 }
 
-void Server::HandleLRange(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_LRange(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 4)
     {
@@ -1088,7 +1157,7 @@ void Server::HandleLRange(const std::vector<RespValue>& args, RespValue& respons
     response.setArray(std::move(arr));
 }
 
-void Server::HandleSAdd(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_SAdd(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -1100,13 +1169,20 @@ void Server::HandleSAdd(const std::vector<RespValue>& args, RespValue& response)
     int64_t added = 0;
     for (size_t i = 2; i < args.size(); i++)
     {
-        added += _db.sadd(key, args[i].toString());
+        int r = _db.sadd(key, args[i].toString());
+        if (r < 0)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            return;
+        }
+        added += r;
     }
     response.type = RespType::Integer;
     response.value = added;
 }
 
-void Server::HandleSRem(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_SRem(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -1124,7 +1200,7 @@ void Server::HandleSRem(const std::vector<RespValue>& args, RespValue& response)
     response.value = removed;
 }
 
-void Server::HandleSIsMember(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_SIsMember(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 3)
     {
@@ -1137,7 +1213,7 @@ void Server::HandleSIsMember(const std::vector<RespValue>& args, RespValue& resp
     response.value = (int64_t)result;
 }
 
-void Server::HandleSMembers(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_SMembers(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -1158,7 +1234,7 @@ void Server::HandleSMembers(const std::vector<RespValue>& args, RespValue& respo
     response.setArray(std::move(arr));
 }
 
-void Server::HandleSCard(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_SCard(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -1172,20 +1248,20 @@ void Server::HandleSCard(const std::vector<RespValue>& args, RespValue& response
 
 // ...
 
-void Server::HandleClient(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Client(const std::vector<RespValue>& args, RespValue& response)
 {
     response.type = RespType::SimpleString;
     response.value = std::string_view("OK");
 }
 
-void Server::HandleFlushAll(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_FlushAll(const std::vector<RespValue>& args, RespValue& response)
 {
     _db.clear();
     response.type = RespType::SimpleString;
     response.value = std::string_view("OK");
 }
 
-void Server::HandleConfig(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_Config(const std::vector<RespValue>& args, RespValue& response)
 {
     if (args.size() < 2)
     {
@@ -1265,7 +1341,7 @@ void Server::HandleConfig(const std::vector<RespValue>& args, RespValue& respons
     }
 }
 
-void Server::HandleBgRewriteAof(const std::vector<RespValue>& args, RespValue& response)
+void Server::PC_BgRewriteAof(const std::vector<RespValue>& args, RespValue& response)
 {
     if (!_persistence)
     {
@@ -1291,6 +1367,65 @@ void Server::HandleBgRewriteAof(const std::vector<RespValue>& args, RespValue& r
         response.type = RespType::Error;
         response.value = std::string_view("ERR failed to start background rewrite");
     }
+}
+
+void Server::PC_Keys(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() != 2)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'keys' command");
+        return;
+    }
+    auto keys = _db.keys(args[1].toString());
+    std::vector<RespValue> arr;
+    arr.reserve(keys.size());
+    for (auto& k : keys)
+    {
+        RespValue v;
+        v.type = RespType::BulkString;
+        v.value = std::move(k);
+        arr.push_back(std::move(v));
+    }
+    response.type = RespType::Array;
+    response.setArray(std::move(arr));
+}
+
+void Server::PC_Exists(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() < 2)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'exists' command");
+        return;
+    }
+    int64_t count = 0;
+    for (size_t i = 1; i < args.size(); i++)
+    {
+        if (_db.exists(args[i].toString()))
+            count++;
+    }
+    response.type = RespType::Integer;
+    response.value = count;
+}
+
+void Server::PC_Rename(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() != 3)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'rename' command");
+        return;
+    }
+    bool ok = _db.rename(args[1].toString(), args[2].toString());
+    if (!ok)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR no such key");
+        return;
+    }
+    response.type = RespType::SimpleString;
+    response.value = std::string_view("OK");
 }
 
 int main(int argc, char** argv)

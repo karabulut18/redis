@@ -1,11 +1,13 @@
 #pragma once
 
 #include "../lib/common/ITcpServer.h"
+#include "../lib/common/LockFreeRingBuffer.h"
 #include "../lib/redis/CommandIds.h"
 #include "../lib/redis/Database.h"
 #include "../lib/redis/Persistence.h"
 #include "../lib/redis/RespParser.h"
 #include "Command.h"
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -22,7 +24,14 @@ class Server : public ITcpServer
     ~Server() override;
 
     std::map<int, Client*> _clients;
-    std::mutex _clientsMutex;
+    std::mutex _clientsMutex; // Guards AcceptConnection (I/O thread inserts)
+    // Deferred disconnect queue: I/O thread pushes IDs here; main thread drains
+    // before iterating _clients. Keeps _clients main-thread-only during iteration.
+    LockFreeRingBuffer<int> _pendingDisconnects{256};
+    // Wakeup condvar: I/O thread signals after enqueuing a command so the main
+    // thread wakes immediately instead of waiting up to 1ms.
+    std::mutex _wakeupMutex;
+    std::condition_variable _wakeupCv;
     Database _db;
     Persistence* _persistence = nullptr;
 
@@ -34,55 +43,59 @@ public:
 
     // Command Processing
     void ProcessCommands();
-    void HandleCommand(Client* client, const RespValue& request);
+    void ProcessCommand(Client* client, const RespValue& request);
     void QueueResponse(Client* client, const RespValue& response);
+    void WakeUp(); // Called by I/O thread after enqueuing a command
 
 private:
-    // Command Handlers
-    void HandlePing(const std::vector<RespValue>& args, RespValue& response);
-    void HandleEcho(const std::vector<RespValue>& args, RespValue& response);
-    void HandleSet(const std::vector<RespValue>& args, RespValue& response);
-    void HandleGet(const std::vector<RespValue>& args, RespValue& response);
-    void HandleDel(const std::vector<RespValue>& args, RespValue& response);
-    void HandleExpire(const std::vector<RespValue>& args, RespValue& response);
-    void HandlePExpire(const std::vector<RespValue>& args, RespValue& response);
-    void HandleTtl(const std::vector<RespValue>& args, RespValue& response);
-    void HandlePTtl(const std::vector<RespValue>& args, RespValue& response);
-    void HandlePersist(const std::vector<RespValue>& args, RespValue& response);
-    void HandleIncr(const std::vector<RespValue>& args, RespValue& response);
-    void HandleIncrBy(const std::vector<RespValue>& args, RespValue& response);
-    void HandleDecr(const std::vector<RespValue>& args, RespValue& response);
-    void HandleDecrBy(const std::vector<RespValue>& args, RespValue& response);
-    void HandleType(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZAdd(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZRem(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZScore(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZRank(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZRange(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZRangeByScore(const std::vector<RespValue>& args, RespValue& response);
-    void HandleZCard(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHSet(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHGet(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHDel(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHGetAll(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHLen(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHMSet(const std::vector<RespValue>& args, RespValue& response);
-    void HandleHMGet(const std::vector<RespValue>& args, RespValue& response);
-    void HandleLPush(const std::vector<RespValue>& args, RespValue& response);
-    void HandleRPush(const std::vector<RespValue>& args, RespValue& response);
-    void HandleLPop(const std::vector<RespValue>& args, RespValue& response);
-    void HandleRPop(const std::vector<RespValue>& args, RespValue& response);
-    void HandleLLen(const std::vector<RespValue>& args, RespValue& response);
-    void HandleLRange(const std::vector<RespValue>& args, RespValue& response);
-    void HandleSAdd(const std::vector<RespValue>& args, RespValue& response);
-    void HandleSRem(const std::vector<RespValue>& args, RespValue& response);
-    void HandleSIsMember(const std::vector<RespValue>& args, RespValue& response);
-    void HandleSMembers(const std::vector<RespValue>& args, RespValue& response);
-    void HandleSCard(const std::vector<RespValue>& args, RespValue& response);
-    void HandleClient(const std::vector<RespValue>& args, RespValue& response);
-    void HandleFlushAll(const std::vector<RespValue>& args, RespValue& response);
-    void HandleConfig(const std::vector<RespValue>& args, RespValue& response);
-    void HandleBgRewriteAof(const std::vector<RespValue>& args, RespValue& response);
+    // Process Commands
+    void PC_Ping(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Echo(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Set(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Get(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Del(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Expire(const std::vector<RespValue>& args, RespValue& response);
+    void PC_PExpire(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Ttl(const std::vector<RespValue>& args, RespValue& response);
+    void PC_PTtl(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Persist(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Incr(const std::vector<RespValue>& args, RespValue& response);
+    void PC_IncrBy(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Decr(const std::vector<RespValue>& args, RespValue& response);
+    void PC_DecrBy(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Type(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZAdd(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZRem(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZScore(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZRank(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZRange(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZRangeByScore(const std::vector<RespValue>& args, RespValue& response);
+    void PC_ZCard(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HSet(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HGet(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HDel(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HGetAll(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HLen(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HMSet(const std::vector<RespValue>& args, RespValue& response);
+    void PC_HMGet(const std::vector<RespValue>& args, RespValue& response);
+    void PC_LPush(const std::vector<RespValue>& args, RespValue& response);
+    void PC_RPush(const std::vector<RespValue>& args, RespValue& response);
+    void PC_LPop(const std::vector<RespValue>& args, RespValue& response);
+    void PC_RPop(const std::vector<RespValue>& args, RespValue& response);
+    void PC_LLen(const std::vector<RespValue>& args, RespValue& response);
+    void PC_LRange(const std::vector<RespValue>& args, RespValue& response);
+    void PC_SAdd(const std::vector<RespValue>& args, RespValue& response);
+    void PC_SRem(const std::vector<RespValue>& args, RespValue& response);
+    void PC_SIsMember(const std::vector<RespValue>& args, RespValue& response);
+    void PC_SMembers(const std::vector<RespValue>& args, RespValue& response);
+    void PC_SCard(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Client(const std::vector<RespValue>& args, RespValue& response);
+    void PC_FlushAll(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Config(const std::vector<RespValue>& args, RespValue& response);
+    void PC_BgRewriteAof(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Keys(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Exists(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Rename(const std::vector<RespValue>& args, RespValue& response);
 
 public:
     bool IsRunning();

@@ -1,0 +1,4 @@
+Loaded config: port=6379
+Loading AOF...
+Server stopped
+

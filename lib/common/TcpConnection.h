@@ -41,8 +41,10 @@ public:
     char _ip[IP_NAME_LENGTH];
 
     int _socketfd;
-    bool _connWrite = false;
-    bool _connClose = false;
+    std::atomic<bool> _connWrite{false};
+    std::atomic<bool> _connClose{false};
+
+    std::mutex _outgoingMutex; // protects _outgoing and _connWrite across threads
 
     SegmentedBuffer _incoming;
     SegmentedBuffer _outgoing;
@@ -57,6 +59,9 @@ public:
     bool Init(ConcurrencyType type);
     void Stop();
     void Send(const char* buffer, ssize_t length);
+    // Thread-safe write from the command/main thread into the outgoing buffer.
+    // Use this instead of Send() when calling from a thread other than the I/O thread.
+    void Enqueue(const char* buffer, ssize_t length);
     bool IsRunning();
 
     void handleWrite();

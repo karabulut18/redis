@@ -93,6 +93,7 @@ bool TcpConnection::closeRequested()
 
 void TcpConnection::handleWrite()
 {
+    std::lock_guard<std::mutex> lock(_outgoingMutex);
     if (_outgoing.empty())
     {
         _connWrite = false;
@@ -244,6 +245,15 @@ void TcpConnection::Send(const char* buffer, ssize_t length)
         }
     }
 };
+
+void TcpConnection::Enqueue(const char* buffer, ssize_t length)
+{
+    if (_state != ClientState::Running)
+        return;
+    std::lock_guard<std::mutex> lock(_outgoingMutex);
+    _outgoing.append(buffer, length);
+    _connWrite = true;
+}
 
 TcpConnection::~TcpConnection()
 {

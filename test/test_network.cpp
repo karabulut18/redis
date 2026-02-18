@@ -1,3 +1,4 @@
+#include "../lib/common/ITcpConnection.h"
 #include "../lib/common/ITcpServer.h"
 #include "../lib/common/Output.h"
 #include "../lib/common/TcpConnection.h"
@@ -103,7 +104,6 @@ public:
     }
 
     using TcpServer::_connectionsBySocketfds;
-    using TcpServer::_responseQueue;
     using TcpServer::_wakeupPipe;
     using TcpServer::EventBased; // Expose the loop to run manually if needed?
     // Actually RunThread calls EventBased.
@@ -143,7 +143,22 @@ void test_response_queue_whitebox()
     // Manually create a TcpConnection wrapper for serverFd
     // TcpConnection::CreateFromSocket is static.
     TcpConnection* conn = TcpConnection::CreateFromSocket(serverFd);
-    conn->Init(ConcurrencyType::EventBased);
+
+    // ITcpConnection mock needed so SetOwner can advance state to OwnerSet,
+    // which is required before Init() can set it to Running.
+    class MockConn : public ITcpConnection
+    {
+    public:
+        size_t OnMessageReceive(const char*, m_size_t len) override
+        {
+            return len;
+        }
+        void OnDisconnect() override
+        {
+        }
+    } mockConn;
+    conn->SetOwner(&mockConn);
+    conn->Init(ConcurrencyType::EventBased); // now state reaches Running
 
     // Inject into server
     server.AddMockConnection(serverFd, conn);
@@ -180,7 +195,13 @@ void test_response_queue_whitebox()
     // Better approach: Don't rely on the real server thread. Stop it?
     // Or just check if data arrived at clientFd.
 
-    // Let's check clientFd.
+    // Give the server I/O thread time to wake on poll(), rebuild pollArgs with
+    // POLLOUT for the injected connection, and call handleWrite().
+    usleep(50000); // 50ms is ample for one poll() iteration
+
+    // Set clientFd non-blocking so read() doesn't hang if data hasn't arrived yet.
+    fd_util::fd_set_nonblock(clientFd);
+
     char buffer[1024];
     memset(buffer, 0, sizeof(buffer));
     ssize_t n = read(clientFd, buffer, sizeof(buffer));
@@ -192,7 +213,7 @@ void test_response_queue_whitebox()
     }
     else
     {
-        // If n < 0 and EAGAIN, keep trying? Server thread might be slow.
+        // Retry once more in case the server thread needed extra time
         usleep(100000); // 100ms
         n = read(clientFd, buffer, sizeof(buffer));
         if (n > 0)
@@ -204,7 +225,7 @@ void test_response_queue_whitebox()
         else
         {
             std::cerr << "Did not receive data on client socket." << std::endl;
-            // assert(false);
+            assert(false);
         }
     }
 

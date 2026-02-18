@@ -51,9 +51,6 @@ bool TcpServer::Init()
         }
         fd_util::fd_set_nonblock(_wakeupPipe[0]);
         fd_util::fd_set_nonblock(_wakeupPipe[1]);
-
-        // Initialize Response Queue
-        _responseQueue = new LockFreeRingBuffer<PendingResponse>(4096);
     }
 
     _serverAddress.sin_family = AF_INET;
@@ -154,23 +151,11 @@ void TcpServer::EventBased()
         // Check Wakeup Pipe (last element)
         if (_pollArgs.back().revents & POLLIN)
         {
-            // Drain pipe
+            // Drain the pipe — connections have already been written to directly
+            // by QueueResponse via Enqueue(); draining just lets poll() proceed.
             char buf[128];
             while (read(_wakeupPipe[0], buf, sizeof(buf)) > 0)
                 ;
-
-            // Process Response Queue
-            PendingResponse resp;
-            while (_responseQueue->pop(resp))
-            {
-                auto it = _connectionsBySocketfds.find(resp.clientSocketFd);
-                if (it != _connectionsBySocketfds.end())
-                {
-                    TcpConnection* conn = it->second;
-                    conn->_outgoing.append(resp.data.data(), resp.data.size());
-                    conn->_connWrite = true;
-                }
-            }
         }
 
         // connections are indexes 1 to size-2 (if wakeup is last)
@@ -225,8 +210,12 @@ void TcpServer::ThreadBased()
 {
     while (_state == ServerState::Running)
     {
-        handleAccept();
-        sleep(1);
+        // Poll the listen socket so we can check _state periodically
+        // and accept new connections promptly without blocking indefinitely.
+        struct pollfd pfd = {_socketfd, POLLIN, 0};
+        int ready = poll(&pfd, 1, 100 /*ms*/);
+        if (ready > 0 && (pfd.revents & POLLIN))
+            handleAccept();
     }
 }
 
@@ -277,21 +266,22 @@ void TcpServer::RemoveClient(int id)
 void TcpServer::QueueResponse(int clientSocketFd, const std::string& data)
 {
     if (_concurrencyType != ConcurrencyType::EventBased)
-        return;
-
-    PendingResponse resp;
-    resp.clientSocketFd = clientSocketFd;
-    resp.data = data;
-
-    // Push to queue
-    while (!_responseQueue->push(resp))
     {
-        // If full, busy wait or yield. Ideally resize or drop.
-        // For now, yield.
-        std::this_thread::yield();
+        // ThreadBased: send directly on the calling thread via the connection.
+        auto it = _connectionsBySocketfds.find(clientSocketFd);
+        if (it != _connectionsBySocketfds.end())
+            it->second->Send(data.c_str(), data.size());
+        return;
     }
 
-    // Signal Wakeup
+    // EventBased: write directly into the connection's outgoing buffer
+    // (thread-safe via Enqueue), then wake the I/O thread via the pipe.
+    {
+        auto it = _connectionsBySocketfds.find(clientSocketFd);
+        if (it != _connectionsBySocketfds.end())
+            it->second->Enqueue(data.c_str(), data.size());
+    }
+
     char buf = 'x';
     write(_wakeupPipe[1], &buf, 1);
 }

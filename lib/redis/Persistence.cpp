@@ -44,51 +44,23 @@ void Persistence::Append(const std::vector<RespValue>& args)
     std::lock_guard<std::mutex> lock(_mutex);
 
     if (_isRewriting)
-    {
         BufferForRewrite(args);
-    }
 
     std::string encoded = EncodeCommand(args);
-    _buffer.insert(_buffer.end(), encoded.begin(), encoded.end());
 
-    // Optimisation: If interval is 0 (Always), flush immediately
     if (_flushIntervalSeconds == 0)
     {
-        if (_file.is_open())
-        {
-            _file.write(encoded.data(), encoded.size());
-            _file.flush();
-        }
-        else
-        {
-            _file.open(_filepath, std::ios::app | std::ios::binary);
-            _file.write(encoded.data(), encoded.size());
-            _file.flush();
-        }
-        // Remove from buffer since we just wrote declaration
-        // Logic fix: The buffer contains previous stuff too?
-        // If interval is 0, we can assume buffer is empty usually,
-        // or we flush everything.
-        // Let's just defer to Flush() logic but call it specially.
-        // But Flush() takes lock. We have lock.
-        // So we need internal flush or just write explicitly.
-
-        // Since we already appended to buffer, let's clear buffer.
-        // Actually, if we wrote to file, we should clear the specific part of buffer?
-        // No, simplest is: buffer grows, if interval==0, write buffer to file and clear buffer.
-        // But we just appended `encoded`.
-        // Let's correct this logic:
-
-        // Re-open if needed (though it should be open)
+        // Always-flush mode: write directly to file, skip the buffer entirely.
+        // Do NOT add to _buffer first — that would cause a double-write.
         if (!_file.is_open())
             _file.open(_filepath, std::ios::app | std::ios::binary);
-
-        // Write EVERYTHING in buffer (in case user switched from non-0 to 0)
-        _file.write(_buffer.data(), _buffer.size());
+        _file.write(encoded.data(), encoded.size());
         _file.flush();
-        _buffer.clear();
-        _lastFlushTime = std::chrono::steady_clock::now();
+        return;
     }
+
+    // Periodic-flush mode: accumulate in buffer; Tick() will flush on schedule.
+    _buffer.insert(_buffer.end(), encoded.begin(), encoded.end());
 }
 
 bool Persistence::Flush()
@@ -199,7 +171,8 @@ bool Persistence::Load(std::function<void(const std::vector<std::string>&)> repl
 
 void Persistence::BufferForRewrite(const std::vector<RespValue>& args)
 {
-    std::lock_guard<std::mutex> lock(_rewriteMutex);
+    // Called only from Append(), which already holds _mutex.
+    // _rewriteBuffer is exclusively accessed under _mutex — no extra lock needed.
     if (!_isRewriting)
         return;
     std::string encoded = EncodeCommand(args);
@@ -254,33 +227,26 @@ void Persistence::HandleRewriteCompletion()
         return;
 
     {
-        std::lock_guard<std::mutex> lock(_rewriteMutex);
+        // Use _mutex consistently — _rewriteBuffer is always accessed under _mutex.
+        // This eliminates the lock-order inversion that previously risked deadlock.
+        std::lock_guard<std::mutex> lock(_mutex);
         for (const auto& cmd : _rewriteBuffer)
-        {
             tmpFile.write(cmd.data(), cmd.size());
-        }
         _rewriteBuffer.clear();
     }
     tmpFile.flush();
     tmpFile.close();
 
     // 2. Atomically replace the old AOF with the new one
-    // Close the current file first
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_file.is_open())
             _file.close();
 
         if (rename(_tmpFilepath.c_str(), _filepath.c_str()) == 0)
-        {
-            // Re-open the new file
             _file.open(_filepath, std::ios::app | std::ios::binary);
-        }
         else
-        {
-            // If rename failed, try to re-open old file at least
             _file.open(_filepath, std::ios::app | std::ios::binary);
-        }
     }
 }
 
