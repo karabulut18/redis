@@ -117,6 +117,45 @@ struct RespValue
     {
         return *std::get<std::shared_ptr<std::vector<std::pair<RespValue, RespValue>>>>(value);
     }
+
+    static RespValue FromSimpleString(std::string_view s)
+    {
+        RespValue val;
+        val.type = RespType::SimpleString;
+        val.value = std::string(s);
+        return val;
+    }
+
+    static RespValue FromError(std::string_view s)
+    {
+        RespValue val;
+        val.type = RespType::Error;
+        val.value = std::string(s);
+        return val;
+    }
+
+    static RespValue FromInteger(int64_t i)
+    {
+        RespValue val;
+        val.type = RespType::Integer;
+        val.value = i;
+        return val;
+    }
+
+    static RespValue FromBulkString(std::string_view s)
+    {
+        RespValue val;
+        val.type = RespType::BulkString;
+        val.value = std::string(s);
+        return val;
+    }
+
+    static RespValue FromNull()
+    {
+        RespValue val;
+        val.type = RespType::Null;
+        return val;
+    }
 };
 
 class RespParser

@@ -56,7 +56,8 @@ enum class CommandId
     Exists,
     Rename,
     MGet,
-    MSet
+    MSet,
+    Object
 };
 
 inline CommandId GetCommandId(const std::string& command)
@@ -109,7 +110,8 @@ inline CommandId GetCommandId(const std::string& command)
                                                                           {"EXISTS", CommandId::Exists},
                                                                           {"RENAME", CommandId::Rename},
                                                                           {"MGET", CommandId::MGet},
-                                                                          {"MSET", CommandId::MSet}};
+                                                                          {"MSET", CommandId::MSet},
+                                                                          {"OBJECT", CommandId::Object}};
 
     std::string upperCmd = command;
     std::transform(upperCmd.begin(), upperCmd.end(), upperCmd.begin(), ::toupper);

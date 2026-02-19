@@ -105,6 +105,7 @@ private:
     void PC_Rename(const std::vector<RespValue>& args, RespValue& response);
     void PC_MGet(const std::vector<RespValue>& args, RespValue& response);
     void PC_MSet(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Object(const std::vector<RespValue>& args, RespValue& response);
 
 public:
     bool IsRunning();

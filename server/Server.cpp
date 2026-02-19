@@ -375,6 +375,9 @@ void Server::ProcessCommand(Client* client, const RespValue& request)
     case CommandId::MSet:
         PC_MSet(arr, response);
         break;
+    case CommandId::Object:
+        PC_Object(arr, response);
+        break;
     case CommandId::Unknown:
         response.type = RespType::Error;
         response.value = std::string_view("ERR unknown subcommand");
@@ -1511,19 +1514,109 @@ void Server::PC_MGet(const std::vector<RespValue>& args, RespValue& response)
 
 void Server::PC_MSet(const std::vector<RespValue>& args, RespValue& response)
 {
-    // MSET key value [key value ...]
     if (args.size() < 3 || (args.size() - 1) % 2 != 0)
     {
-        response.type = RespType::Error;
-        response.value = std::string_view("ERR wrong number of arguments for 'mset' command");
+        response = RespValue::FromError("ERR wrong number of arguments for 'mset' command");
         return;
     }
-    for (size_t i = 1; i + 1 < args.size(); i += 2)
+
+    for (size_t i = 1; i < args.size(); i += 2)
     {
         _db.set(args[i].toString(), args[i + 1].toString(), -1);
     }
-    response.type = RespType::SimpleString;
-    response.value = std::string_view("OK");
+
+    response = RespValue::FromSimpleString("OK");
+}
+
+void Server::PC_Object(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() < 3)
+    {
+        response = RespValue::FromError("ERR wrong number of arguments for 'object' command");
+        return;
+    }
+
+    std::string subcommand = args[1].toString();
+    std::transform(subcommand.begin(), subcommand.end(), subcommand.begin(), ::toupper);
+
+    if (subcommand != "ENCODING")
+    {
+        response = RespValue::FromNull();
+        return;
+    }
+
+    std::string key = args[2].toString();
+    EntryType type = _db.getType(key);
+
+    if (type == EntryType::NONE)
+    {
+        response = RespValue::FromNull();
+        return;
+    }
+
+    // In a real Redis, we'd look deep into the Entry object for its encoding.
+    // For this implementation, we'll map our internal structures to the most
+    // appropriate Redis encoding name.
+
+    switch (type)
+    {
+    case EntryType::STRING:
+    {
+        const std::string* val = _db.get(key);
+        if (!val)
+        {
+            response = RespValue::FromNull();
+            return;
+        }
+
+        // Try to see if it's an integer
+        try
+        {
+            size_t pos;
+            std::stoll(*val, &pos);
+            if (pos == val->size())
+            {
+                response = RespValue::FromSimpleString("int");
+                return;
+            }
+        }
+        catch (...)
+        {
+        }
+
+        if (val->size() <= 44)
+            response = RespValue::FromSimpleString("embstr");
+        else
+            response = RespValue::FromSimpleString("raw");
+        break;
+    }
+    case EntryType::ZSET:
+        // We use a SkipList-based ZSet. Real Redis uses 'listpack' for small,
+        // 'skiplist' for large.
+        if (_db.zcard(key) <= 128)
+            response = RespValue::FromSimpleString("listpack");
+        else
+            response = RespValue::FromSimpleString("skiplist");
+        break;
+    case EntryType::HASH:
+        // We use HashMap. Real Redis uses 'listpack' for small, 'hashtable' for large.
+        if (_db.hlen(key) <= 128)
+            response = RespValue::FromSimpleString("listpack");
+        else
+            response = RespValue::FromSimpleString("hashtable");
+        break;
+    case EntryType::LIST:
+        // We use std::deque. Real Redis uses 'quicklist'.
+        response = RespValue::FromSimpleString("quicklist");
+        break;
+    case EntryType::SET:
+        // We use std::unordered_set. Real Redis uses 'intset' or 'hashtable'.
+        response = RespValue::FromSimpleString("hashtable");
+        break;
+    default:
+        response = RespValue::FromNull();
+        break;
+    }
 }
 
 int main(int argc, char** argv)
