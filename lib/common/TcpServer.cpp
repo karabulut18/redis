@@ -182,7 +182,7 @@ void TcpServer::EventBased()
             if (ready & POLLOUT)
                 conn->handleWrite();
 
-            if ((ready & POLLERR) || (ready & POLLHUP) || conn->closeRequested())
+            if ((ready & POLLERR) || conn->closeRequested())
                 toClose.push_back(fd);
         }
 
@@ -225,7 +225,6 @@ void TcpServer::handleAccept()
 
         TcpConnection* connection = TcpConnection::CreateFromSocket(clientSocket);
 
-        // fix the logical mistake here
         ITcpConnection* connectionOwner = _owner->AcceptConnection(connection->_socketfd, connection);
         connection->SetOwner(connectionOwner);
         if (connection->Init(_concurrencyType))

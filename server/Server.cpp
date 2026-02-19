@@ -151,8 +151,7 @@ void Server::Run()
 
 void Server::OnClientDisconnect(Client* client)
 {
-    // Removing logging to avoid spam if desired, or keep it.
-    // PUTF_LN("Client disconnected: " + std::to_string(client->GetId()));
+    PUTF_LN("Client disconnected: " + std::to_string(client->GetId()));
 
     std::lock_guard<std::mutex> lock(_clientsMutex);
     auto it = _clients.find(client->GetId());

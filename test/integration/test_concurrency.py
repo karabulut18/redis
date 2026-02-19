@@ -84,6 +84,8 @@ def test_concurrent_incr(redis_server):
 
     assert not errors, "Errors during concurrent INCR: " + "\n".join(errors)
 
-    result = redis.Redis(host=host, port=port, decode_responses=True).get("global_counter")
+    verify = redis.Redis(host=host, port=port, decode_responses=True)
+    result = verify.get("global_counter")
+    verify.close()
     expected = N_THREADS * INCRS
     assert int(result) == expected, f"Expected {expected}, got {result}"
