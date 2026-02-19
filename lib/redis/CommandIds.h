@@ -54,7 +54,9 @@ enum class CommandId
     BgRewriteAof,
     Keys,
     Exists,
-    Rename
+    Rename,
+    MGet,
+    MSet
 };
 
 inline CommandId GetCommandId(const std::string& command)
@@ -105,7 +107,9 @@ inline CommandId GetCommandId(const std::string& command)
                                                                           {"BGREWRITEAOF", CommandId::BgRewriteAof},
                                                                           {"KEYS", CommandId::Keys},
                                                                           {"EXISTS", CommandId::Exists},
-                                                                          {"RENAME", CommandId::Rename}};
+                                                                          {"RENAME", CommandId::Rename},
+                                                                          {"MGET", CommandId::MGet},
+                                                                          {"MSET", CommandId::MSet}};
 
     std::string upperCmd = command;
     std::transform(upperCmd.begin(), upperCmd.end(), upperCmd.begin(), ::toupper);
@@ -144,6 +148,7 @@ inline bool IsWriteCommand(CommandId id)
     case CommandId::SRem:
     case CommandId::FlushAll:
     case CommandId::Rename:
+    case CommandId::MSet:
         return true;
     default:
         return false;

@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <netinet/in.h>
+#include <shared_mutex>
 #include <string>
 
 class ITcpServer;
@@ -35,6 +36,7 @@ class TcpServer
 protected:
     ConcurrencyType _concurrencyType = ConcurrencyType::ThreadBased;
     std::map<int, TcpConnection*> _connectionsBySocketfds;
+    mutable std::shared_mutex _connMapMutex; // guards _connectionsBySocketfds
 
     Error _error;
 

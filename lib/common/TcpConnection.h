@@ -58,6 +58,7 @@ public:
 
     bool Init(ConcurrencyType type);
     void Stop();
+    void DetachSocket();
     void Send(const char* buffer, ssize_t length);
     // Thread-safe write from the command/main thread into the outgoing buffer.
     // Use this instead of Send() when calling from a thread other than the I/O thread.

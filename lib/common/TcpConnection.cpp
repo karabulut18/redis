@@ -205,7 +205,8 @@ void TcpConnection::Stop()
     {
         if (_concurencyType == ConcurrencyType::EventBased)
         {
-            close(_socketfd);
+            if (_socketfd != -1)
+                close(_socketfd);
             _state = ClientState::Stopped;
             _connClose = true;
             if (_owner)
@@ -214,6 +215,12 @@ void TcpConnection::Stop()
         else
             _state = ClientState::StopRequested;
     }
+}
+
+void TcpConnection::DetachSocket()
+{
+    _socketfd = -1;
+    _state = ClientState::Stopped;
 };
 
 void TcpConnection::Send(const char* buffer, ssize_t length)

@@ -116,24 +116,26 @@ void TcpServer::EventBased()
     {
         _pollArgs.clear();
 
-        struct pollfd server_pfd = {_socketfd, POLLIN, 0};
-        _pollArgs.push_back(server_pfd);
-
-        for (std::pair<int, TcpConnection*> iter : _connectionsBySocketfds)
+        // ── Phase 1: build poll list under shared lock ──────────────────────
         {
-            TcpConnection* conn = iter.second;
+            std::shared_lock<std::shared_mutex> lock(_connMapMutex);
+            struct pollfd server_pfd = {_socketfd, POLLIN, 0};
+            _pollArgs.push_back(server_pfd);
 
-            struct pollfd client_pfd = {conn->_socketfd, POLLIN, 0}; // always poll for reads
-
-            if (conn->_connWrite) // poll for write only if write is set
-                client_pfd.events |= POLLOUT;
-            _pollArgs.push_back(client_pfd);
+            for (const auto& [fd, conn] : _connectionsBySocketfds)
+            {
+                struct pollfd client_pfd = {conn->_socketfd, POLLIN, 0};
+                if (conn->_connWrite)
+                    client_pfd.events |= POLLOUT;
+                _pollArgs.push_back(client_pfd);
+            }
         }
 
-        // Add Wakeup Pipe Read End
+        // ── Phase 2: wakeup pipe at the end ────────────────────────────────
         struct pollfd wakeup_pfd = {_wakeupPipe[0], POLLIN, 0};
         _pollArgs.push_back(wakeup_pfd);
 
+        // ── Phase 3: poll — no lock held ───────────────────────────────────
         int returnValue = poll(_pollArgs.data(), (nfds_t)_pollArgs.size(), -1);
 
         if (returnValue < 0 && errno == EINTR)
@@ -145,39 +147,66 @@ void TcpServer::EventBased()
             break;
         }
 
-        if (_pollArgs[0].revents & POLLIN) // first one is for listening socket
-            handleAccept();
+        // handleAccept moved to the end of the loop cycle to avoid contamination of poll results on FD reuse.
 
-        // Check Wakeup Pipe (last element)
+        // Drain wakeup pipe
         if (_pollArgs.back().revents & POLLIN)
         {
-            // Drain the pipe — connections have already been written to directly
-            // by QueueResponse via Enqueue(); draining just lets poll() proceed.
             char buf[128];
             while (read(_wakeupPipe[0], buf, sizeof(buf)) > 0)
                 ;
         }
 
-        // connections are indexes 1 to size-2 (if wakeup is last)
-        // Adjust loop limit
+        // ── Phase 4: handle I/O — no lock held (handleRead can re-enter QueueResponse) ─
         size_t limit = _pollArgs.size() - 1;
+        std::vector<int> toClose;
 
         for (size_t i = 1; i < limit; i++)
         {
+            int fd = _pollArgs[i].fd;
             uint32_t ready = _pollArgs[i].revents;
-            TcpConnection* conn = _connectionsBySocketfds[_pollArgs[i].fd];
+
+            // Look up the connection under a brief shared lock
+            TcpConnection* conn = nullptr;
+            {
+                std::shared_lock<std::shared_mutex> lock(_connMapMutex);
+                auto it = _connectionsBySocketfds.find(fd);
+                if (it == _connectionsBySocketfds.end())
+                    continue; // already removed
+                conn = it->second;
+            }
+
+            // I/O without any lock held — handleRead may call QueueResponse
             if (ready & POLLIN)
                 conn->handleRead();
             if (ready & POLLOUT)
                 conn->handleWrite();
 
             if ((ready & POLLERR) || (ready & POLLHUP) || conn->closeRequested())
+                toClose.push_back(fd);
+        }
+
+        // ── Phase 5: erase closed connections under exclusive lock ──────────
+        if (!toClose.empty())
+        {
+            std::unique_lock<std::shared_mutex> lock(_connMapMutex);
+            for (int fd : toClose)
             {
-                conn->Stop();
-                delete conn;
-                _connectionsBySocketfds.erase(_pollArgs[i].fd);
+                auto it = _connectionsBySocketfds.find(fd);
+                if (it != _connectionsBySocketfds.end())
+                {
+                    it->second->Stop();
+                    delete it->second;
+                    _connectionsBySocketfds.erase(it);
+                }
             }
         }
+
+        // ── Phase 6: handle accept AFTER existing clients have been purged ──────────
+        // This avoids applying stale pollution from closed FDs to new connections that
+        // might reuse the same FD in the same cycle.
+        if (_pollArgs[0].revents & POLLIN)
+            handleAccept();
     }
 }
 
@@ -200,7 +229,17 @@ void TcpServer::handleAccept()
         ITcpConnection* connectionOwner = _owner->AcceptConnection(connection->_socketfd, connection);
         connection->SetOwner(connectionOwner);
         if (connection->Init(_concurrencyType))
+        {
+            std::unique_lock<std::shared_mutex> lock(_connMapMutex);
+            auto it = _connectionsBySocketfds.find(connection->_socketfd);
+            if (it != _connectionsBySocketfds.end())
+            {
+                it->second->DetachSocket();
+                delete it->second;
+                _connectionsBySocketfds.erase(it);
+            }
             _connectionsBySocketfds.insert({connection->_socketfd, connection});
+        }
         else
             delete connection;
     }
@@ -221,6 +260,7 @@ void TcpServer::ThreadBased()
 
 void TcpServer::CleanUp()
 {
+    std::unique_lock<std::shared_mutex> lock(_connMapMutex);
     TcpConnection* conn;
     for (std::pair<int, TcpConnection*> iter : _connectionsBySocketfds)
     {
@@ -255,6 +295,7 @@ TcpServer::~TcpServer()
 
 void TcpServer::RemoveClient(int id)
 {
+    std::unique_lock<std::shared_mutex> lock(_connMapMutex);
     std::map<int, TcpConnection*>::iterator it = _connectionsBySocketfds.find(id);
     if (it != _connectionsBySocketfds.end())
     {
@@ -268,6 +309,7 @@ void TcpServer::QueueResponse(int clientSocketFd, const std::string& data)
     if (_concurrencyType != ConcurrencyType::EventBased)
     {
         // ThreadBased: send directly on the calling thread via the connection.
+        std::shared_lock<std::shared_mutex> lock(_connMapMutex);
         auto it = _connectionsBySocketfds.find(clientSocketFd);
         if (it != _connectionsBySocketfds.end())
             it->second->Send(data.c_str(), data.size());
@@ -277,6 +319,7 @@ void TcpServer::QueueResponse(int clientSocketFd, const std::string& data)
     // EventBased: write directly into the connection's outgoing buffer
     // (thread-safe via Enqueue), then wake the I/O thread via the pipe.
     {
+        std::shared_lock<std::shared_mutex> lock(_connMapMutex);
         auto it = _connectionsBySocketfds.find(clientSocketFd);
         if (it != _connectionsBySocketfds.end())
             it->second->Enqueue(data.c_str(), data.size());

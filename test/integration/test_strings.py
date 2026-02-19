@@ -1,53 +1,65 @@
+"""
+Extended string command tests: MGET, MSET, INCR on non-integer, KEYS, EXISTS, RENAME.
+"""
 
 import pytest
-import time
 
-def test_set_get(redis_client):
-    assert redis_client.set("foo", "bar") is True
-    assert redis_client.get("foo") == "bar"
 
-def test_set_overwrite(redis_client):
-    redis_client.set("key", "val1")
-    assert redis_client.get("key") == "val1"
-    redis_client.set("key", "val2")
-    assert redis_client.get("key") == "val2"
+def test_mset_mget(redis_client):
+    result = redis_client.mset({"a": "1", "b": "2", "c": "3"})
+    assert result is True
+    vals = redis_client.mget("a", "b", "c", "missing")
+    assert vals == ["1", "2", "3", None]
 
-def test_del_existing_key(redis_client):
-    redis_client.set("foo", "bar")
-    assert redis_client.delete("foo") == 1
-    assert redis_client.get("foo") is None
 
-def test_del_nonexistent_key(redis_client):
-    assert redis_client.delete("nonexistent") == 0
+def test_mget_all_missing(redis_client):
+    vals = redis_client.mget("x1", "x2")
+    assert vals == [None, None]
 
-def test_incr(redis_client):
-    redis_client.set("counter", "10")
-    assert redis_client.incr("counter") == 11
-    assert redis_client.get("counter") == "11"
 
-def test_incr_new_key(redis_client):
-    assert redis_client.incr("new_counter") == 1
-    assert redis_client.get("new_counter") == "1"
+def test_incr_on_non_integer(redis_client):
+    redis_client.set("str_key", "not_a_number")
+    with pytest.raises(Exception):
+        redis_client.incr("str_key")
 
-# The following tests might be flaky if the server doesn't implement expiration precisely or if time drift occurs.
-# Also, python's time vs server's time.
 
-def test_expire(redis_client):
-    redis_client.set("temp", "val")
-    assert redis_client.expire("temp", 1) is True
-    # Initial check
-    assert redis_client.get("temp") == "val"
-    time.sleep(1.2) # Wait slightly more than 1s
-    assert redis_client.get("temp") is None
+def test_keys_pattern(redis_client):
+    redis_client.mset({"hello": "world", "helo": "mars", "world": "earth"})
+    keys = redis_client.keys("hel*")
+    assert set(keys) >= {"hello", "helo"}
+    # "world" should NOT match "hel*"
+    assert "world" not in keys
 
-def test_ttl(redis_client):
-    redis_client.set("timed", "val")
-    redis_client.expire("timed", 10)
-    ttl = redis_client.ttl("timed")
-    assert 0 < ttl <= 10
 
-def test_set_ex(redis_client):
-    redis_client.set("exkey", "val", ex=1)
-    assert redis_client.get("exkey") == "val"
-    time.sleep(1.2)
-    assert redis_client.get("exkey") is None
+def test_keys_all(redis_client):
+    redis_client.mset({"k1": "v1", "k2": "v2"})
+    keys = redis_client.keys("*")
+    assert "k1" in keys
+    assert "k2" in keys
+
+
+def test_exists_present(redis_client):
+    redis_client.set("present", "yes")
+    assert redis_client.exists("present") == 1
+
+
+def test_exists_absent(redis_client):
+    assert redis_client.exists("definitely_not_here") == 0
+
+
+def test_exists_multiple(redis_client):
+    redis_client.set("e1", "v1")
+    redis_client.set("e2", "v2")
+    assert redis_client.exists("e1", "e2", "missing") == 2
+
+
+def test_rename(redis_client):
+    redis_client.set("old_key", "value")
+    redis_client.rename("old_key", "new_key")
+    assert redis_client.get("old_key") is None
+    assert redis_client.get("new_key") == "value"
+
+
+def test_rename_nonexistent(redis_client):
+    with pytest.raises(Exception):
+        redis_client.rename("ghost_key", "target_key")

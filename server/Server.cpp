@@ -3,22 +3,42 @@
 #include "../lib/common/Output.h"
 #include "../lib/common/TcpConnection.h"
 #include "../lib/common/TcpServer.h"
+#include "../lib/redis/Config.h"
 #include "../lib/redis/RespParser.h"
 #include "Client.h"
 #include "Server.h"
 #include <iostream>
 #include <unistd.h>
 
+static Server* s_instance = nullptr;
+
 Server* Server::Get()
 {
-    static Server instance;
-    return &instance;
+    if (!s_instance)
+        s_instance = new Server(6379, "appendonly.aof", 1); // defaults if InitFromConfig not called
+    return s_instance;
 }
 
-Server::Server()
+void Server::InitFromConfig(const ServerConfig& cfg)
 {
-    _tcpServer = new TcpServer(this, 6379);
-    _persistence = new Persistence("appendonly.aof");
+    if (!s_instance)
+    {
+        int interval = 1;
+        if (cfg.appendfsync == "always" || cfg.appendfsync == "no")
+            interval = 0;
+        else if (cfg.appendfsync_interval > 0)
+            interval = cfg.appendfsync_interval;
+
+        s_instance = new Server(cfg.port, cfg.appendfilename, interval);
+    }
+}
+
+Server::Server(int port, const std::string& aofFilename, int flushInterval)
+{
+    _tcpServer = new TcpServer(this, port);
+    _persistence = new Persistence(aofFilename);
+    if (flushInterval >= 0)
+        _persistence->SetFlushInterval(flushInterval);
     _tcpServer->SetConcurrencyType(ConcurrencyType::EventBased);
 }
 
@@ -81,7 +101,9 @@ ITcpConnection* Server::AcceptConnection(int id, TcpConnection* connection)
     if (it != _clients.end())
     {
         PUTF_LN("Cleaning up stale client on FD " + std::to_string(id));
-        delete it->second;
+        // Defer deletion to the main thread so Client's command queue
+        // doesn't get destroyed while the main thread might be draining it.
+        _staleClientsToDelete.push(it->second);
         _clients.erase(it);
     }
     Client* client = new Client(id, connection);
@@ -127,30 +149,50 @@ void Server::Run()
     PUTF_LN("Server stopped\n");
 }
 
-void Server::OnClientDisconnect(int id)
+void Server::OnClientDisconnect(Client* client)
 {
-    PUTF_LN("Client disconnected: " + std::to_string(id));
-    // Don't touch _clients here — we're on the I/O thread.
-    // Push the ID to the deferred queue; the main thread will clean up.
-    _pendingDisconnects.push(id);
+    // Removing logging to avoid spam if desired, or keep it.
+    // PUTF_LN("Client disconnected: " + std::to_string(client->GetId()));
+
+    std::lock_guard<std::mutex> lock(_clientsMutex);
+    auto it = _clients.find(client->GetId());
+    // Only remove if it's the SAME client object. If AcceptConnection replaced it,
+    // it->second would be the new client, and we should do nothing.
+    if (it != _clients.end() && it->second == client)
+    {
+        _clients.erase(it);
+        _pendingDisconnects.push(client);
+    }
 }
 
 void Server::ProcessCommands()
 {
-    // Drain deferred disconnects first — main thread is the only writer to _clients.
-    int disconnectedId;
-    while (_pendingDisconnects.pop(disconnectedId))
+    // Delete any stale Client* objects that AcceptConnection evicted (due to FD
+    // reuse). These have already been removed from _clients by AcceptConnection.
+    Client* staleClient;
+    while (_staleClientsToDelete.pop(staleClient))
+        delete staleClient;
+
+    // Delete disconnected clients that OnClientDisconnect removed from _clients.
+    Client* disconnectedClient;
+    while (_pendingDisconnects.pop(disconnectedClient))
+        delete disconnectedClient;
+
+    // Snapshot _clients to iterate safely without holding the lock during processing.
+    // This avoids blocking the I/O thread (AcceptConnection/OnDisconnect) for long periods.
+    std::vector<Client*> clientsSnapshot;
     {
-        auto it = _clients.find(disconnectedId);
-        if (it != _clients.end())
-        {
-            delete it->second;
-            _clients.erase(it);
-        }
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        clientsSnapshot.reserve(_clients.size());
+        for (const auto& [id, client] : _clients)
+            clientsSnapshot.push_back(client);
     }
 
-    // Iterate _clients — no concurrent writers, no lock needed.
-    for (auto& [id, client] : _clients)
+    // Iterate snapshot — SAFE because client objects are only deleted in this
+    // function (above), and we are the only thread running this function.
+    // If a client disconnects during this loop, it will be removed from _clients
+    // map (by I/O thread) but the object remains alive until next ProcessCommands calls delete.
+    for (Client* client : clientsSnapshot)
     {
         Command cmd;
         while (client->DequeueCommand(cmd))
@@ -326,6 +368,12 @@ void Server::ProcessCommand(Client* client, const RespValue& request)
         break;
     case CommandId::Rename:
         PC_Rename(arr, response);
+        break;
+    case CommandId::MGet:
+        PC_MGet(arr, response);
+        break;
+    case CommandId::MSet:
+        PC_MSet(arr, response);
         break;
     case CommandId::Unknown:
         response.type = RespType::Error;
@@ -802,8 +850,8 @@ void Server::PC_ZRange(const std::vector<RespValue>& args, RespValue& response)
     {
         RespValue m;
         m.type = RespType::BulkString;
-        m.value = std::string_view(item.member);
-        arr.push_back(m);
+        m.value = std::string(item.member); // std::string to own the data (string_view into loop var would dangle)
+        arr.push_back(std::move(m));
 
         if (withScores)
         {
@@ -849,8 +897,8 @@ void Server::PC_ZRangeByScore(const std::vector<RespValue>& args, RespValue& res
     {
         RespValue m;
         m.type = RespType::BulkString;
-        m.value = std::string_view(item.member);
-        arr.push_back(m);
+        m.value = std::string(item.member); // own the data
+        arr.push_back(std::move(m));
     }
     response.setArray(std::move(arr));
 }
@@ -881,24 +929,29 @@ void Server::PC_ZRank(const std::vector<RespValue>& args, RespValue& response)
 
 void Server::PC_HSet(const std::vector<RespValue>& args, RespValue& response)
 {
-    if (args.size() < 4)
+    // HSET key field value [field value ...]
+    if (args.size() < 4 || (args.size() - 2) % 2 != 0)
     {
         response.type = RespType::Error;
         response.value = std::string_view("ERR wrong number of arguments for 'hset' command");
         return;
     }
     std::string key = args[1].toString();
-    std::string field = args[2].toString();
-    std::string value = args[3].toString();
-    int result = _db.hset(key, field, value);
-    if (result < 0)
+    int64_t addedCount = 0;
+    for (size_t i = 2; i + 1 < args.size(); i += 2)
     {
-        response.type = RespType::Error;
-        response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
-        return;
+        int result = _db.hset(key, args[i].toString(), args[i + 1].toString());
+        if (result < 0)
+        {
+            response.type = RespType::Error;
+            response.value = std::string_view("WRONGTYPE Operation against a key holding the wrong kind of value");
+            return;
+        }
+        if (result > 0)
+            addedCount++;
     }
     response.type = RespType::Integer;
-    response.value = result ? int64_t(1) : int64_t(0);
+    response.value = addedCount;
 }
 
 void Server::PC_HGet(const std::vector<RespValue>& args, RespValue& response)
@@ -958,11 +1011,11 @@ void Server::PC_HGetAll(const std::vector<RespValue>& args, RespValue& response)
     {
         RespValue f, v;
         f.type = RespType::BulkString;
-        f.value = std::string_view(field);
+        f.value = std::string(field); // own the data — string_view into local map would dangle
         v.type = RespType::BulkString;
-        v.value = std::string_view(value);
-        arr.push_back(f);
-        arr.push_back(v);
+        v.value = std::string(value);
+        arr.push_back(std::move(f));
+        arr.push_back(std::move(v));
     }
     response.setArray(std::move(arr));
 }
@@ -1428,11 +1481,71 @@ void Server::PC_Rename(const std::vector<RespValue>& args, RespValue& response)
     response.value = std::string_view("OK");
 }
 
+void Server::PC_MGet(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() < 2)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'mget' command");
+        return;
+    }
+    response.type = RespType::Array;
+    std::vector<RespValue> results;
+    for (size_t i = 1; i < args.size(); i++)
+    {
+        const std::string* val = _db.get(args[i].toString());
+        RespValue rv;
+        if (val)
+        {
+            rv.type = RespType::BulkString;
+            rv.value = *val;
+        }
+        else
+        {
+            rv.type = RespType::Null;
+        }
+        results.push_back(std::move(rv));
+    }
+    response.setArray(std::move(results));
+}
+
+void Server::PC_MSet(const std::vector<RespValue>& args, RespValue& response)
+{
+    // MSET key value [key value ...]
+    if (args.size() < 3 || (args.size() - 1) % 2 != 0)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'mset' command");
+        return;
+    }
+    for (size_t i = 1; i + 1 < args.size(); i += 2)
+    {
+        _db.set(args[i].toString(), args[i + 1].toString(), -1);
+    }
+    response.type = RespType::SimpleString;
+    response.value = std::string_view("OK");
+}
+
 int main(int argc, char** argv)
 {
     Output::GetInstance()->Init("redis_server");
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
+
+    // Parse --config <path> from command line
+    std::string configPath = "redis.conf";
+    for (int i = 1; i < argc - 1; ++i)
+    {
+        std::string arg(argv[i]);
+        if (arg == "--config" || arg == "-c")
+        {
+            configPath = argv[i + 1];
+            break;
+        }
+    }
+
+    ServerConfig cfg = ParseConfig(configPath);
+    Server::InitFromConfig(cfg);
 
     if (!Server::Get()->Init())
         return 1;

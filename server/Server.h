@@ -3,6 +3,7 @@
 #include "../lib/common/ITcpServer.h"
 #include "../lib/common/LockFreeRingBuffer.h"
 #include "../lib/redis/CommandIds.h"
+#include "../lib/redis/Config.h"
 #include "../lib/redis/Database.h"
 #include "../lib/redis/Persistence.h"
 #include "../lib/redis/RespParser.h"
@@ -20,14 +21,17 @@ struct RespValue;
 class Server : public ITcpServer
 {
     TcpServer* _tcpServer;
-    Server();
+    Server(int port, const std::string& aofFilename, int flushInterval);
     ~Server() override;
 
     std::map<int, Client*> _clients;
     std::mutex _clientsMutex; // Guards AcceptConnection (I/O thread inserts)
-    // Deferred disconnect queue: I/O thread pushes IDs here; main thread drains
-    // before iterating _clients. Keeps _clients main-thread-only during iteration.
-    LockFreeRingBuffer<int> _pendingDisconnects{256};
+    // Deferred disconnect queue: I/O thread pushes Client* pointers here;
+    // main thread drains, verifies identity, and deletes them.
+    LockFreeRingBuffer<Client*> _pendingDisconnects{256};
+    // Stale clients evicted by AcceptConnection during FD reuse: main thread
+    // deletes these separate from _pendingDisconnects so _clients stays consistent.
+    LockFreeRingBuffer<Client*> _staleClientsToDelete{256};
     // Wakeup condvar: I/O thread signals after enqueuing a command so the main
     // thread wakes immediately instead of waiting up to 1ms.
     std::mutex _wakeupMutex;
@@ -38,7 +42,10 @@ class Server : public ITcpServer
 public:
     ITcpConnection* AcceptConnection(int id, TcpConnection* connection) override;
     static Server* Get();
-    void OnClientDisconnect(int id);
+    // Must be called once before Get() to configure port / AOF path.
+    // If not called, defaults (port 6379, appendonly.aof) are used.
+    static void InitFromConfig(const ServerConfig& cfg);
+    void OnClientDisconnect(Client* client);
     void Run();
 
     // Command Processing
@@ -96,6 +103,8 @@ private:
     void PC_Keys(const std::vector<RespValue>& args, RespValue& response);
     void PC_Exists(const std::vector<RespValue>& args, RespValue& response);
     void PC_Rename(const std::vector<RespValue>& args, RespValue& response);
+    void PC_MGet(const std::vector<RespValue>& args, RespValue& response);
+    void PC_MSet(const std::vector<RespValue>& args, RespValue& response);
 
 public:
     bool IsRunning();

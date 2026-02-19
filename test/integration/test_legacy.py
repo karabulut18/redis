@@ -1,56 +1,27 @@
-import socket
-import time
+"""
+Refactored from the old standalone test_legacy.py script into proper pytest functions.
+Tests raw RESP wire protocol via a direct socket connection.
+"""
 
-def send_command(sock, command):
-    print(f"Sending: {command.strip()}")
+
+def send_raw(sock, command: str) -> str:
     sock.sendall(command.encode())
-    response = sock.recv(4096).decode()
-    print(f"Received: {response.strip()}")
-    return response
+    return sock.recv(4096).decode()
 
-def test():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(2)
-        connected = False
-        for i in range(5):
-            try:
-                s.connect(('127.0.0.1', 6379))
-                connected = True
-                break
-            except ConnectionRefusedError:
-                print("Connection refused, retrying...")
-                time.sleep(1)
-        
-        if not connected:
-            print("Failed to connect to server")
-            exit(1)
 
-        print("Connected to server")
+def test_ping_raw(raw_client):
+    resp = send_raw(raw_client, "*1\r\n$4\r\nPING\r\n")
+    assert "+PONG" in resp
 
-        # Test PING
-        resp = send_command(s, "*1\r\n$4\r\nPING\r\n")
-        if "+PONG" not in resp:
-            print("PING failed")
-            exit(1)
-        
-        # Test SET
-        resp = send_command(s, "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")
-        if "+OK" not in resp:
-            print("SET failed")
-            exit(1)
-        
-        # Test GET
-        resp = send_command(s, "*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n")
-        if "$3\r\nbar" not in resp:
-            print("GET failed")
-            exit(1)
-        
-        print("Integration test passed!")
-        s.close()
-    except Exception as e:
-        print(f"Test failed: {e}")
-        exit(1)
 
-if __name__ == "__main__":
-    test()
+def test_set_get_raw(raw_client):
+    resp = send_raw(raw_client, "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")
+    assert "+OK" in resp
+
+    resp = send_raw(raw_client, "*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n")
+    assert "$3\r\nbar" in resp
+
+
+def test_unknown_command_raw(raw_client):
+    resp = send_raw(raw_client, "*1\r\n$7\r\nNOTREAL\r\n")
+    assert resp.startswith("-")  # error response

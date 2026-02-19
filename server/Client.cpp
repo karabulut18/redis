@@ -129,7 +129,7 @@ bool Client::DequeueCommand(Command& cmd)
 void Client::OnDisconnect()
 {
     PUTF_LN("Client disconnected: " + std::to_string(_id));
-    Server::Get()->OnClientDisconnect(_id);
+    Server::Get()->OnClientDisconnect(this);
 }
 
 void Client::Ping()
