@@ -17,8 +17,8 @@ Client::Client(int id, TcpConnection* connection)
 
 Client::~Client()
 {
-    if (_connection != nullptr && _connection->IsRunning())
-        _connection->Stop();
+    // Do not access _connection here—it is owned and deleted by TcpServer.
+    // By the time Client is deleted, its connection has already been destroyed.
     delete _parser;
     delete _commandQueue;
     _commandQueue = nullptr; // Safety

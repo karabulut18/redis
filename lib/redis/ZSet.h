@@ -46,6 +46,11 @@ public:
         return _tree;
     }
 
+    const HashMap& map() const
+    {
+        return _map;
+    }
+
 private:
     void treeInsert(ZNode* node);
 

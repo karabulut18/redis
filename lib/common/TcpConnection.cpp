@@ -108,11 +108,13 @@ void TcpConnection::handleWrite()
 
     if (bytesWritten < 0)
     {
+        printf("TcpConnection handleWrite: write failed, errno=%d (EAGAIN=%d)\n", errno, EAGAIN);
         if (errno != EAGAIN && errno != EWOULDBLOCK)
             _connClose = true;
     }
     else if (bytesWritten > 0)
     {
+        printf("TcpConnection handleWrite: wrote %zd bytes to fd %d\n", bytesWritten, _socketfd);
         _outgoing.consume(bytesWritten);
     }
 

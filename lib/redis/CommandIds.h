@@ -57,7 +57,12 @@ enum class CommandId
     Rename,
     MGet,
     MSet,
-    Object
+    Object,
+    Subscribe,
+    Unsubscribe,
+    Publish,
+    Save,
+    BgSave
 };
 
 inline CommandId GetCommandId(const std::string& command)
@@ -111,7 +116,12 @@ inline CommandId GetCommandId(const std::string& command)
                                                                           {"RENAME", CommandId::Rename},
                                                                           {"MGET", CommandId::MGet},
                                                                           {"MSET", CommandId::MSet},
-                                                                          {"OBJECT", CommandId::Object}};
+                                                                          {"OBJECT", CommandId::Object},
+                                                                          {"SUBSCRIBE", CommandId::Subscribe},
+                                                                          {"UNSUBSCRIBE", CommandId::Unsubscribe},
+                                                                          {"PUBLISH", CommandId::Publish},
+                                                                          {"SAVE", CommandId::Save},
+                                                                          {"BGSAVE", CommandId::BgSave}};
 
     std::string upperCmd = command;
     std::transform(upperCmd.begin(), upperCmd.end(), upperCmd.begin(), ::toupper);

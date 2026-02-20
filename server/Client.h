@@ -5,6 +5,8 @@
 #include "../lib/common/LockFreeRingBuffer.h"
 #include "../lib/common/SegmentedBuffer.h"
 #include "Command.h"
+#include <string>
+#include <unordered_set>
 
 class TcpConnection;
 class RespParser;
@@ -34,7 +36,25 @@ public:
     void SendResponse(const RespValue& response);
     std::string PrepareResponse(const RespValue& response);
 
+    bool isSubscribed() const
+    {
+        return !subscribedChannels.empty();
+    }
+    void addSubscription(const std::string& channel)
+    {
+        subscribedChannels.insert(channel);
+    }
+    bool removeSubscription(const std::string& channel)
+    {
+        return subscribedChannels.erase(channel) > 0;
+    }
+    const std::unordered_set<std::string>& getSubscriptions() const
+    {
+        return subscribedChannels;
+    }
+
 private:
+    std::unordered_set<std::string> subscribedChannels;
     TcpConnection* _connection = nullptr;
     RespParser* _parser = nullptr;
     SegmentedBuffer _inBuffer;

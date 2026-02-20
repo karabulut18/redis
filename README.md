@@ -13,6 +13,8 @@ A high-performance, multi-threaded Redis server implementation in C++ focusing o
   - Booleans
 - **Enhanced Zero-Copy Architecture**: Utilizes `std::string_view` for parsing incoming network buffers and database lookups. Complements this with `SegmentedBuffer` for direct socket reads and a zero-copy persistence path that writes `RespValue` directly to disk without intermediate string conversions.
 - **AOF Persistence**: Full Append Only File support with configurable flush intervals. Implements a background rewriting mechanism (`BGREWRITEAOF`) using a child process to compact the log without blocking command execution.
+- **RDB Snapshotting**: Custom, highly-compact binary serialization for point-in-time database snapshots (`SAVE`). Implements Linux `fork()` COW semantics to save snapshots asynchronously in the background (`BGSAVE`) without interrupting the main event loop.
+- **Pub/Sub Messaging**: Complete publish/subscribe implementation supporting `PUBLISH`, `SUBSCRIBE`, and `UNSUBSCRIBE`. Architected purely utilizing lock-free concurrent queues across the networking and server worker threads to guarantee zero mutex contention.
 - **Visitor Pattern Traversal**: Decoupled database traversal logic using the Visitor pattern, enabling flexible state inspection for AOF rewrites and secondary integrations.
 - **Memory Optimized**: Employs `std::variant` for the core `RespValue` structure, significantly reducing the memory overhead of represented data types through overlapping memory storage.
 - **Multi-threaded I/O**: Custom TCP networking stack supporting `poll`-based event loops and asynchronous response queuing.
@@ -24,7 +26,8 @@ A high-performance, multi-threaded Redis server implementation in C++ focusing o
   - **Hashes**: `HSET`, `HGET`, `HDEL`, `HLEN`, `HGETALL`, `HMSET`, `HMGET`.
   - **Sets**: `SADD`, `SREM`, `SISMEMBER`, `SMEMBERS`, `SCARD`.
   - **Sorted Sets**: `ZADD`, `ZREM`, `ZSCORE`, `ZRANK`, `ZRANGE`, `ZRANGEBYSCORE`, `ZCARD`.
-  - **System**: `PING`, `ECHO`, `CONFIG`, `FLUSHALL`, `BGREWRITEAOF`.
+  - **Pub/Sub**: `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`.
+  - **System**: `PING`, `ECHO`, `CONFIG`, `FLUSHALL`, `BGREWRITEAOF`, `SAVE`, `BGSAVE`.
 
 ## 🛠 Architecture
 
@@ -69,6 +72,7 @@ redis-cli BGREWRITEAOF                      # Trigger background compaction
 
 The project includes a suite of unit and integration tests.
 
+### C++ Unit Tests
 ```bash
 # Run all core tests
 ./build/test/test_ringbuffer
@@ -80,11 +84,20 @@ The project includes a suite of unit and integration tests.
 ./build/test/test_network
 ```
 
+### Python Integration Tests
+The integration suite utilizes `pytest` and `redis-py` to spawn the server automatically and validate end-to-end command execution, persistence durability across restarts, and concurrent Pub/Sub mechanics:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r test/integration/requirements.txt
+pytest test/integration/ -v
+```
+
 ## 📝 Future Roadmap
 
 - [x] Persistence (AOF with Background Rewrite).
-- [ ] RDB Binary Export.
-- [ ] Pub/Sub support.
+- [x] RDB Binary Export.
+- [x] Pub/Sub support.
 - [ ] Advanced commands (`BRPOP`, `HINCRBY`, `MGET`, etc.).
 
 ## 📚 Acknowledgments

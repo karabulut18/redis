@@ -93,17 +93,24 @@ AOF files can grow indefinitely. Compaction is handled via the \texttt{BGREWRITE
     \item \textbf{Visitor Pattern}: The database implements an \texttt{accept(IDataVisitor\&)} method. This pattern decouples the internal data structure layouts from the persistence serialization logic. The \texttt{AofRewriteVisitor} traverses the database and writes a compacted set of RESP commands to a temporary file.
 \end{itemize}
 
-\section{Roadmap \& Future Work}
-\subsection{Pub/Sub Mechanism}
-The next major architectural phase will be the implementation of \textbf{Pub/Sub}. This will involve:
+\subsection{RDB Binary Snapshotting}
+In addition to AOF, the server supports classical RDB snapshotting for faster reloads and compact backups.
 \begin{itemize}
-    \item A global subscription registry to track client interests in channels.
-    \item Efficient message broadcasting from producers to subscribers.
-    \item Integration with the multi-threaded I/O layer to handle asynchronous notifications.
+    \item \textbf{Custom Binary Serialization}: An \texttt{RdbVisitor} efficiently serializes complex intrusive structures (such as \texttt{HashMap} and \texttt{AVLTree}) directly to a contiguous binary format. 
+    \item \textbf{BGSAVE COW Semantics}: Asynchronous operations utilize the \texttt{forkAndRun} process abstraction to trigger Copy-On-Write logic, dumping the heap's memory image without freezing the main server thread.
 \end{itemize}
 
+\section{Pub/Sub Mechanism}
+The server features a fully lock-free concurrent Publish/Subscribe messaging protocol.
+\begin{itemize}
+    \item \textbf{Thread Safety}: Leverages Lock-Free Ring Buffers to transfer cross-thread notifications between Publisher sockets and Subscriber sockets without stalling the reactor loop.
+    \item \textbf{Memory Ownership}: Connections cleanly sever themselves from topic bindings during a disconnection utilizing zero-allocation un-registration sweeps on the worker thread.
+    \item \textbf{O(1) Fan-out}: A central \texttt{unordered\_map} coordinates direct dispatching of \texttt{["message", channel, data]} payloads to listening network descriptors.
+\end{itemize}
+
+\section{Roadmap \& Future Work}
 \subsection{Advanced Features}
-Future developments include RDB binary snapshots, \texttt{WATCH/MULTI} transactions, and cluster support.
+Future developments include \texttt{WATCH/MULTI} transactions, advanced list commands (\texttt{BRPOP}), and cluster support.
 
 \section{Conclusion}
 The Redis-from-Scratch project demonstrates that zero-copy lookups and efficient thread-safety patterns can significantly enhance the throughput of networked data stores in C++.

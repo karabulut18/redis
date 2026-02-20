@@ -53,6 +53,13 @@ bool Server::Init()
     if (!_tcpServer->Init())
         return false;
 
+    // Load RDB
+    std::cout << "Loading RDB snapshot..." << std::endl;
+    if (!_persistence->LoadRdb(_db))
+    {
+        std::cerr << "Failed to load RDB, continuing..." << std::endl;
+    }
+
     // Load AOF
     std::cout << "Loading AOF..." << std::endl;
     _persistence->Load(
@@ -170,12 +177,18 @@ void Server::ProcessCommands()
     // reuse). These have already been removed from _clients by AcceptConnection.
     Client* staleClient;
     while (_staleClientsToDelete.pop(staleClient))
+    {
+        CleanupClientPubSub(staleClient);
         delete staleClient;
+    }
 
     // Delete disconnected clients that OnClientDisconnect removed from _clients.
     Client* disconnectedClient;
     while (_pendingDisconnects.pop(disconnectedClient))
+    {
+        CleanupClientPubSub(disconnectedClient);
         delete disconnectedClient;
+    }
 
     // Snapshot _clients to iterate safely without holding the lock during processing.
     // This avoids blocking the I/O thread (AcceptConnection/OnDisconnect) for long periods.
@@ -223,6 +236,20 @@ void Server::ProcessCommand(Client* client, const RespValue& request)
     CommandId id = GetCommandId(cmdName);
 
     RespValue response;
+
+    // Pub/Sub context isolation
+    if (client->isSubscribed())
+    {
+        if (id != CommandId::Subscribe && id != CommandId::Unsubscribe && id != CommandId::Ping &&
+            id != CommandId::Unknown)
+        {
+            response.type = RespType::Error;
+            response.value =
+                std::string_view("ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT allowed in this context");
+            QueueResponse(client, response);
+            return;
+        }
+    }
 
     // Dispatch
     switch (id)
@@ -359,6 +386,12 @@ void Server::ProcessCommand(Client* client, const RespValue& request)
     case CommandId::BgRewriteAof:
         PC_BgRewriteAof(arr, response);
         break;
+    case CommandId::Save:
+        PC_Save(arr, response);
+        break;
+    case CommandId::BgSave:
+        PC_BgSave(arr, response);
+        break;
     case CommandId::Keys:
         PC_Keys(arr, response);
         break;
@@ -376,6 +409,15 @@ void Server::ProcessCommand(Client* client, const RespValue& request)
         break;
     case CommandId::Object:
         PC_Object(arr, response);
+        break;
+    case CommandId::Subscribe:
+        PC_Subscribe(client, arr, response);
+        break;
+    case CommandId::Unsubscribe:
+        PC_Unsubscribe(client, arr, response);
+        break;
+    case CommandId::Publish:
+        PC_Publish(client, arr, response);
         break;
     case CommandId::Unknown:
         response.type = RespType::Error;
@@ -1405,10 +1447,10 @@ void Server::PC_BgRewriteAof(const std::vector<RespValue>& args, RespValue& resp
         return;
     }
 
-    if (_persistence->IsRewriting())
+    if (args.size() != 1)
     {
         response.type = RespType::Error;
-        response.value = std::string_view("ERR background rewrite already in progress");
+        response.value = std::string_view("ERR wrong number of arguments for 'bgrewriteaof' command");
         return;
     }
 
@@ -1420,7 +1462,63 @@ void Server::PC_BgRewriteAof(const std::vector<RespValue>& args, RespValue& resp
     else
     {
         response.type = RespType::Error;
-        response.value = std::string_view("ERR failed to start background rewrite");
+        response.value = std::string_view("ERR Background append only file rewriting already in progress");
+    }
+}
+
+void Server::PC_Save(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() != 1)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'save' command");
+        return;
+    }
+
+    if (!_persistence)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR persistence is disabled");
+        return;
+    }
+
+    if (_persistence->SaveRdb(_db))
+    {
+        response.type = RespType::SimpleString;
+        response.value = std::string_view("OK");
+    }
+    else
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR failed to save RDB file");
+    }
+}
+
+void Server::PC_BgSave(const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() != 1)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'bgsave' command");
+        return;
+    }
+
+    if (!_persistence)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR persistence is disabled");
+        return;
+    }
+
+    if (_persistence->BgSaveRdb(_db))
+    {
+        response.type = RespType::SimpleString;
+        response.value = std::string_view("Background saving started");
+    }
+    else
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR Background save already in progress");
     }
 }
 
@@ -1616,6 +1714,138 @@ void Server::PC_Object(const std::vector<RespValue>& args, RespValue& response)
         response = RespValue::FromNull();
         break;
     }
+}
+
+void Server::SendPubSubMessage(Client* client, const std::string& type, const std::string& channel,
+                               const RespValue& payload)
+{
+    RespValue msg;
+    std::vector<RespValue> arr;
+
+    RespValue typeVal;
+    typeVal.type = RespType::BulkString;
+    typeVal.value = type;
+    arr.push_back(std::move(typeVal));
+
+    RespValue chanVal;
+    chanVal.type = RespType::BulkString;
+    chanVal.value = channel;
+    arr.push_back(std::move(chanVal));
+
+    // If it's a number (for count of subscriptions), make it an Integer, otherwise use the given payload
+    arr.push_back(payload);
+
+    msg.setArray(std::move(arr));
+    QueueResponse(client, msg);
+}
+
+void Server::CleanupClientPubSub(Client* client)
+{
+    // Because this is only called from ProcessCommands in the Worker thread, it is thread-safe.
+    for (const std::string& channel : client->getSubscriptions())
+    {
+        auto pubIt = _pubsubChannels.find(channel);
+        if (pubIt != _pubsubChannels.end())
+        {
+            pubIt->second.erase(client);
+            if (pubIt->second.empty())
+                _pubsubChannels.erase(pubIt);
+        }
+    }
+}
+
+void Server::PC_Subscribe(Client* client, const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() < 2)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'subscribe' command");
+        return;
+    }
+
+    for (size_t i = 1; i < args.size(); ++i)
+    {
+        std::string channel = args[i].toString();
+        client->addSubscription(channel);
+        _pubsubChannels[channel].insert(client);
+
+        RespValue count;
+        count.type = RespType::Integer;
+        count.value = static_cast<int64_t>(client->getSubscriptions().size());
+
+        SendPubSubMessage(client, "subscribe", channel, count);
+    }
+
+    // We do not send a standard response object because SendPubSubMessage pushed it.
+    // The main flow sends `response`, so we return an invalid/null response here to tell it skip.
+    // Actually, Server calls QueueResponse(client, response) at the bottom.
+    // To suppress it, we shouldn't use the standard response block.
+    // Let's ensure response is None.
+    response.type = RespType::None;
+}
+
+void Server::PC_Unsubscribe(Client* client, const std::vector<RespValue>& args, RespValue& response)
+{
+    std::vector<std::string> channelsToUnsubscribe;
+    if (args.size() > 1)
+    {
+        for (size_t i = 1; i < args.size(); ++i)
+            channelsToUnsubscribe.push_back(args[i].toString());
+    }
+    else
+    {
+        for (const std::string& ch : client->getSubscriptions())
+            channelsToUnsubscribe.push_back(ch);
+    }
+
+    for (const std::string& channel : channelsToUnsubscribe)
+    {
+        client->removeSubscription(channel);
+        auto it = _pubsubChannels.find(channel);
+        if (it != _pubsubChannels.end())
+        {
+            it->second.erase(client);
+            if (it->second.empty())
+                _pubsubChannels.erase(it);
+        }
+
+        RespValue count;
+        count.type = RespType::Integer;
+        count.value = static_cast<int64_t>(client->getSubscriptions().size());
+        SendPubSubMessage(client, "unsubscribe", channel, count);
+    }
+
+    response.type = RespType::None; // Suppress standard response
+}
+
+void Server::PC_Publish(Client* client, const std::vector<RespValue>& args, RespValue& response)
+{
+    if (args.size() != 3)
+    {
+        response.type = RespType::Error;
+        response.value = std::string_view("ERR wrong number of arguments for 'publish' command");
+        return;
+    }
+
+    std::string channel = args[1].toString();
+    std::string message = args[2].toString();
+    int64_t receivers = 0;
+
+    auto it = _pubsubChannels.find(channel);
+    if (it != _pubsubChannels.end())
+    {
+        for (Client* subscriber : it->second)
+        {
+            RespValue payload;
+            payload.type = RespType::BulkString;
+            payload.value = message;
+            SendPubSubMessage(subscriber, "message", channel, payload);
+            receivers++;
+        }
+    }
+
+    response.type = RespType::Integer;
+    response.value = receivers;
 }
 
 int main(int argc, char** argv)

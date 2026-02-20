@@ -26,6 +26,8 @@ public:
     // Returns true if successful.
     bool Flush();
 
+    // --- AOF Persistence ---
+
     // Loads the AOF file and replays commands.
     // Callback is called for each parsed command args.
     // Returns true if successful.
@@ -41,6 +43,16 @@ public:
     // Buffers commands for the rewrite completion.
     void BufferForRewrite(const std::vector<RespValue>& args);
 
+    // --- RDB Persistence ---
+    // Synchronous save to RDB format
+    bool SaveRdb(Database& db);
+
+    // Asynchronous save to RDB format
+    bool BgSaveRdb(Database& db);
+
+    // Loads from RDB format. Should be called before AOF Load.
+    bool LoadRdb(Database& db);
+
     // Configuration
     void SetFlushInterval(int64_t seconds);
     int64_t GetFlushInterval() const;
@@ -50,7 +62,8 @@ public:
     void Tick();
 
 private:
-    std::string _filepath;
+    std::string _filepath;    // AOF filepath
+    std::string _rdbFilepath; // RDB filepath
     std::ofstream _file;
     std::vector<char> _buffer; // In-memory buffer for AOF
     std::mutex _mutex;
@@ -67,6 +80,7 @@ private:
     std::vector<std::string> _rewriteBuffer;
     // _rewriteBuffer is protected by _mutex (consistent lock ordering, no deadlock risk)
     std::atomic<bool> _isRewriting{false};
+    std::atomic<bool> _isBgSavingRdb{false};
 
     void HandleRewriteCompletion();
     void CleanupRewrite(bool success);

@@ -1,12 +1,14 @@
 #include "Persistence.h"
 #include "AofRewriteVisitor.h"
 #include "Database.h"
+#include "RdbVisitor.h"
 #include "RespParser.h"
 #include <cstdio>
 #include <iostream>
 #include <unistd.h>
 
-Persistence::Persistence(const std::string& filepath) : _filepath(filepath), _flushIntervalSeconds(1) // Default 1s
+Persistence::Persistence(const std::string& filepath)
+    : _filepath(filepath), _rdbFilepath("dump.rdb"), _flushIntervalSeconds(1) // Default 1s
 {
     _lastFlushTime = std::chrono::steady_clock::now();
     // Open file in append mode immediately to create if not exists
@@ -88,13 +90,20 @@ bool Persistence::Flush()
 
 void Persistence::Tick()
 {
-    if (_isRewriting)
+    if (_isRewriting || _isBgSavingRdb)
     {
         int exitCode = 0;
         ProcessUtil::Status s = _rewriteProcess.checkStatus(&exitCode);
         if (s == ProcessUtil::Status::EXITED || s == ProcessUtil::Status::SIGNALED || s == ProcessUtil::Status::ERROR)
         {
-            CleanupRewrite(s == ProcessUtil::Status::EXITED && exitCode == 0);
+            if (_isRewriting)
+            {
+                CleanupRewrite(s == ProcessUtil::Status::EXITED && exitCode == 0);
+            }
+            else if (_isBgSavingRdb)
+            {
+                _isBgSavingRdb = false;
+            }
         }
     }
 
@@ -181,7 +190,7 @@ void Persistence::BufferForRewrite(const std::vector<RespValue>& args)
 
 bool Persistence::StartRewrite(Database& db)
 {
-    if (_isRewriting)
+    if (_isRewriting || _isBgSavingRdb)
         return false;
 
     _tmpFilepath = _filepath + ".tmp";
@@ -263,4 +272,206 @@ void Persistence::CleanupRewrite(bool success)
     }
     _isRewriting = false;
     _rewriteBuffer.clear();
+}
+
+bool Persistence::SaveRdb(Database& db)
+{
+    std::ofstream rdbFile(_rdbFilepath, std::ios::binary);
+    if (!rdbFile.is_open())
+        return false;
+
+    RdbVisitor visitor(rdbFile);
+    db.accept(visitor);
+    visitor.writeEOF();
+
+    rdbFile.flush();
+    rdbFile.close();
+    return true;
+}
+
+bool Persistence::BgSaveRdb(Database& db)
+{
+    if (_isRewriting || _isBgSavingRdb)
+        return false;
+
+    std::string tmpRdb = _rdbFilepath + ".tmp";
+    _isBgSavingRdb = true;
+
+    pid_t pid = _rewriteProcess.forkAndRun(
+        [&]()
+        {
+            std::ofstream rdbFile(tmpRdb, std::ios::binary);
+            if (!rdbFile.is_open())
+                _exit(1);
+
+            RdbVisitor visitor(rdbFile);
+            db.accept(visitor);
+            visitor.writeEOF();
+
+            rdbFile.flush();
+            rdbFile.close();
+
+            rename(tmpRdb.c_str(), _rdbFilepath.c_str());
+            _exit(0);
+        });
+
+    if (pid < 0)
+    {
+        _isRewriting = false;
+        return false;
+    }
+
+    return true;
+}
+
+bool Persistence::LoadRdb(Database& db)
+{
+    std::ifstream inFile(_rdbFilepath, std::ios::binary);
+    if (!inFile.is_open())
+        return true; // Normal if it doesn't exist
+
+    char magic[6];
+    if (!inFile.read(magic, 6) || std::strncmp(magic, "RDB001", 6) != 0)
+    {
+        std::cerr << "Invalid RDB file signature" << std::endl;
+        return false;
+    }
+
+    auto readLength = [&](uint64_t& out) -> bool
+    {
+        char buf[8];
+        if (!inFile.read(buf, 8))
+            return false;
+        out = 0;
+        for (int i = 0; i < 8; ++i)
+        {
+            out |= (static_cast<uint64_t>(static_cast<unsigned char>(buf[i])) << (i * 8));
+        }
+        return true;
+    };
+
+    auto readString = [&](std::string& out) -> bool
+    {
+        uint64_t len = 0;
+        if (!readLength(len))
+            return false;
+        out.resize(len);
+        if (len > 0)
+        {
+            if (!inFile.read(out.data(), len))
+                return false;
+        }
+        return true;
+    };
+
+    while (true)
+    {
+        uint8_t type;
+        if (!inFile.read(reinterpret_cast<char*>(&type), 1))
+            break;
+
+        if (type == 0 /* TYPE_EOF */)
+            break;
+
+        int64_t expiresAt = -1;
+        char expBuf[8];
+        if (!inFile.read(expBuf, 8))
+            break;
+
+        uint64_t exp_u64 = 0;
+        for (int i = 0; i < 8; ++i)
+        {
+            exp_u64 |= (static_cast<uint64_t>(static_cast<unsigned char>(expBuf[i])) << (i * 8));
+        }
+        expiresAt = static_cast<int64_t>(exp_u64);
+
+        std::string key;
+        if (!readString(key))
+            break;
+
+        int64_t ttlMs = -1;
+        if (expiresAt > 0)
+        {
+            ttlMs = expiresAt - currentTimeMs();
+            if (ttlMs <= 0)
+                ttlMs = 1; // Expire almost immediately if already past
+        }
+
+        if (type == 1 /* TYPE_STRING */)
+        {
+            std::string val;
+            if (!readString(val))
+                break;
+            db.set(key, val, ttlMs);
+        }
+        else if (type == 2 /* TYPE_LIST */)
+        {
+            uint64_t len = 0;
+            if (!readLength(len))
+                break;
+            for (uint64_t i = 0; i < len; ++i)
+            {
+                std::string item;
+                if (!readString(item))
+                    break;
+                db.rpush(key, item);
+            }
+            if (ttlMs > 0)
+                db.expire(key, ttlMs);
+        }
+        else if (type == 3 /* TYPE_SET */)
+        {
+            uint64_t len = 0;
+            if (!readLength(len))
+                break;
+            for (uint64_t i = 0; i < len; ++i)
+            {
+                std::string item;
+                if (!readString(item))
+                    break;
+                db.sadd(key, item);
+            }
+            if (ttlMs > 0)
+                db.expire(key, ttlMs);
+        }
+        else if (type == 4 /* TYPE_HASH */)
+        {
+            uint64_t len = 0;
+            if (!readLength(len))
+                break;
+            for (uint64_t i = 0; i < len; ++i)
+            {
+                std::string field, val;
+                if (!readString(field) || !readString(val))
+                    break;
+                db.hset(key, field, val);
+            }
+            if (ttlMs > 0)
+                db.expire(key, ttlMs);
+        }
+        else if (type == 5 /* TYPE_ZSET */)
+        {
+            uint64_t len = 0;
+            if (!readLength(len))
+                break;
+            for (uint64_t i = 0; i < len; ++i)
+            {
+                std::string member;
+                if (!readString(member))
+                    break;
+
+                uint64_t scoreRaw = 0;
+                if (!readLength(scoreRaw))
+                    break;
+                double score = 0;
+                std::memcpy(&score, &scoreRaw, 8);
+
+                db.zadd(key, score, member);
+            }
+            if (ttlMs > 0)
+                db.expire(key, ttlMs);
+        }
+    }
+
+    return true;
 }

@@ -11,6 +11,10 @@
 #include <condition_variable>
 #include <map>
 #include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class TcpServer;
@@ -21,7 +25,6 @@ struct RespValue;
 class Server : public ITcpServer
 {
     TcpServer* _tcpServer;
-    Server(int port, const std::string& aofFilename, int flushInterval);
     ~Server() override;
 
     std::map<int, Client*> _clients;
@@ -50,6 +53,9 @@ public:
 
     // Command Processing
     void ProcessCommands();
+    // Pub/Sub Implementation
+    std::unordered_map<std::string, std::unordered_set<Client*>> _pubsubChannels;
+
     void ProcessCommand(Client* client, const RespValue& request);
     void QueueResponse(Client* client, const RespValue& response);
     void WakeUp(); // Called by I/O thread after enqueuing a command
@@ -100,6 +106,8 @@ private:
     void PC_FlushAll(const std::vector<RespValue>& args, RespValue& response);
     void PC_Config(const std::vector<RespValue>& args, RespValue& response);
     void PC_BgRewriteAof(const std::vector<RespValue>& args, RespValue& response);
+    void PC_Save(const std::vector<RespValue>& args, RespValue& response);
+    void PC_BgSave(const std::vector<RespValue>& args, RespValue& response);
     void PC_Keys(const std::vector<RespValue>& args, RespValue& response);
     void PC_Exists(const std::vector<RespValue>& args, RespValue& response);
     void PC_Rename(const std::vector<RespValue>& args, RespValue& response);
@@ -107,8 +115,19 @@ private:
     void PC_MSet(const std::vector<RespValue>& args, RespValue& response);
     void PC_Object(const std::vector<RespValue>& args, RespValue& response);
 
+    // Pub/Sub
+    void PC_Subscribe(Client* client, const std::vector<RespValue>& args, RespValue& response);
+    void PC_Unsubscribe(Client* client, const std::vector<RespValue>& args, RespValue& response);
+    void PC_Publish(Client* client, const std::vector<RespValue>& args, RespValue& response);
+    void SendPubSubMessage(Client* client, const std::string& type, const std::string& channel,
+                           const RespValue& payload);
+    void CleanupClientPubSub(Client* client);
+
+private:
+    Server(int port, const std::string& aofFilename, int flushInterval);
+
 public:
+    bool Init();
     bool IsRunning();
     void Stop();
-    bool Init();
 };
