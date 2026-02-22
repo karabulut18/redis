@@ -4,41 +4,35 @@ A high-performance, multi-threaded Redis server implementation in C++ focusing o
 
 ## 🚀 Features
 
-- **RESP3 Protocol Suite**: Full support for encoding and decoding Redis Serialization Protocol (RESP3) data types:
-  - Simple Strings & Errors
-  - Integers & Big Numbers
-  - Bulk Strings
-  - Arrays & Sets
-  - Maps (Key-Value pairs)
-  - Booleans
-- **Enhanced Zero-Copy Architecture**: Utilizes `std::string_view` for parsing incoming network buffers and database lookups. Complements this with `SegmentedBuffer` for direct socket reads and a zero-copy persistence path that writes `RespValue` directly to disk without intermediate string conversions.
-- **AOF Persistence**: Full Append Only File support with configurable flush intervals. Implements a background rewriting mechanism (`BGREWRITEAOF`) using a child process to compact the log without blocking command execution.
-- **RDB Snapshotting**: Custom, highly-compact binary serialization for point-in-time database snapshots (`SAVE`). Implements Linux `fork()` COW semantics to save snapshots asynchronously in the background (`BGSAVE`) without interrupting the main event loop.
-- **Pub/Sub Messaging**: Complete publish/subscribe implementation supporting `PUBLISH`, `SUBSCRIBE`, and `UNSUBSCRIBE`. Architected purely utilizing lock-free concurrent queues across the networking and server worker threads to guarantee zero mutex contention.
-- **Visitor Pattern Traversal**: Decoupled database traversal logic using the Visitor pattern, enabling flexible state inspection for AOF rewrites and secondary integrations.
-- **Memory Optimized**: Employs `std::variant` for the core `RespValue` structure, significantly reducing the memory overhead of represented data types through overlapping memory storage.
-- **Multi-threaded I/O**: Custom TCP networking stack supporting `poll`-based event loops and asynchronous response queuing.
-- **Thread Safety**: Implements a lock-free Producer-Consumer pattern using `LockFreeRingBuffer` and self-piping for efficient cross-thread communication without mutex contention on the hot path.
+- **RESP3 Protocol Suite**: Full support for encoding and decoding Redis Serialization Protocol (RESP3) data types including Simple Strings, Errors, Integers, Bulk Strings, Arrays, Sets, Maps, and Booleans.
+- **Enhanced Zero-Copy Architecture**: Utilizes `std::string_view` for parsing incoming network buffers and database lookups. Complements this with `SegmentedBuffer` for direct socket reads and a zero-copy persistence path.
+- **Visitor Pattern Architecture**: Implements the Visitor pattern for decoupled database traversal, enabling efficient AOF rewriting, RDB snapshots, and flexible state inspection without exposing internal database structures.
+- **AOF Persistence**: Full Append Only File support with configurable flush intervals (`appendfsync-interval`). Features a background rewriting mechanism (`BGREWRITEAOF`) using `fork()` COW semantics to compact logs without blocking the main event loop.
+- **RDB Snapshotting**: Custom binary serialization for point-in-time snapshots. Support for both synchronous (`SAVE`) and asynchronous (`BGSAVE`) background saves.
+- **Pub/Sub Messaging**: Complete publish/subscribe implementation supporting `PUBLISH`, `SUBSCRIBE`, and `UNSUBSCRIBE`. Architected with lock-free concurrent queues to ensure zero mutex contention on the messaging hot path.
+- **Memory Optimized**: Employs `std::variant` for the core `RespValue` structure, significantly reducing memory overhead.
+- **High-Concurrency I/O**: Multi-threaded TCP networking stack supporting `poll`-based event loops and asynchronous response queuing.
+- **Lock-Free Communication**: Implements a Producer-Consumer pattern using specialized `LockFreeRingBuffer` and self-piping for efficient cross-thread signaling.
 
 - **Supported Data Structures**:
-  - **Strings**: `GET`, `SET` (with EX/PX), `DEL`, `TTL`, `EXPIRE`, `INCR`, `DECR`, etc.
+  - **Strings**: `GET`, `SET` (with EX/PX), `DEL`, `TTL`, `PTTL`, `EXPIRE`, `PEXPIRE`, `PERSIST`, `INCR`, `INCRBY`, `DECR`, `DECRBY`, `MGET`, `MSET`, `EXISTS`, `RENAME`, `TYPE`, `KEYS`.
   - **Lists**: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LLEN`, `LRANGE`.
   - **Hashes**: `HSET`, `HGET`, `HDEL`, `HLEN`, `HGETALL`, `HMSET`, `HMGET`.
   - **Sets**: `SADD`, `SREM`, `SISMEMBER`, `SMEMBERS`, `SCARD`.
   - **Sorted Sets**: `ZADD`, `ZREM`, `ZSCORE`, `ZRANK`, `ZRANGE`, `ZRANGEBYSCORE`, `ZCARD`.
   - **Pub/Sub**: `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`.
-  - **System**: `PING`, `ECHO`, `CONFIG`, `FLUSHALL`, `BGREWRITEAOF`, `SAVE`, `BGSAVE`.
+  - **System**: `PING`, `ECHO`, `CONFIG`, `FLUSHALL`, `BGREWRITEAOF`, `SAVE`, `BGSAVE`, `CLIENT`, `OBJECT`.
 
 ## 🛠 Architecture
 
 ![Architecture](doc/architecture_diagram.png)
 
-The project is divided into several clear components:
+The project is architected for maximum performance and modularity:
 
 - `lib/`: Core library containing networking (`TcpServer`, `TcpConnection`), the RESP parser (`RespParser`), threading utilities (`LockFreeRingBuffer`), and the Persistence engine.
 - `lib/common/`: Shared utilities including `SegmentedBuffer`, `ProcessUtil` (for fork management), and intrusive data structure helpers.
-- `server/`: The main server logic, implementing a Producer-Consumer architecture. The Network Thread produces commands into a lock-free queue, which the Server Thread consumes. Responses are queued back to the Network Thread for transmission, ensuring thread safety and decoupling.
-- `client/`: A test client utility for verifying server behavior and protocol compliance.
+- `server/`: The main server logic, implementing a Producer-Consumer architecture. The Network Thread produces commands into a lock-free queue, which the Server Thread consumes.
+- `visitor/`: Implements the Visitor pattern for database traversal, separating business logic from storage format.
 
 For a detailed deep-dive into the system design, please refer to the [Architecture Report](doc/report.pdf).
 
@@ -59,7 +53,7 @@ make -j$(sysctl -n hw.ncpu)
 ```bash
 ./build/server/redis_server
 ```
-The server will start listening on the default Redis port (6379), load its AOF state, and begin accepting connections.
+The server will start listening on the default Redis port (6379), load its RDB/AOF state, and begin accepting connections.
 
 ### Persistence Configuration
 The server supports configurable persistence through the standard `CONFIG` command:
@@ -85,20 +79,22 @@ The project includes a suite of unit and integration tests.
 ```
 
 ### Python Integration Tests
-The integration suite utilizes `pytest` and `redis-py` to spawn the server automatically and validate end-to-end command execution, persistence durability across restarts, and concurrent Pub/Sub mechanics:
+The integration suite utilizes `pytest` and `redis-py` to validate end-to-end command execution, persistence durability, and concurrency:
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r test/integration/requirements.txt
+source .venv/bin/activate
 pytest test/integration/ -v
 ```
 
 ## 📝 Future Roadmap
 
 - [x] Persistence (AOF with Background Rewrite).
-- [x] RDB Binary Export.
+- [x] RDB Binary Export/Import.
 - [x] Pub/Sub support.
-- [ ] Advanced commands (`BRPOP`, `HINCRBY`, `MGET`, etc.).
+- [x] Multi-key commands (`MGET`, `MSET`).
+- [ ] Advanced commands (`BRPOP`, `BLPOP`, `HINCRBY`, etc.).
+- [ ] Lua Scripting support.
+- [ ] Redis Cluster protocol subset.
+
 
 ## 📚 Acknowledgments
 
